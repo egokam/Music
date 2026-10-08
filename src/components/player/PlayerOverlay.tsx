@@ -203,9 +203,9 @@ export const PlayerOverlay = ({
   );
 
   const frameStyle = useAnimatedStyle(() => ({
-    left: 0,
+    left: interpolate(progress.value, [0, 1], [16, 0]),
+    right: interpolate(progress.value, [0, 1], [16, 0]),
     top: interpolate(progress.value, [0, 1], [miniTop, 0]),
-    width: windowWidth,
     bottom: interpolate(progress.value, [0, 1], [miniBottom, 0]),
     borderTopLeftRadius: interpolate(progress.value, [0, 1], [32, 40]),
     borderTopRightRadius: interpolate(progress.value, [0, 1], [32, 40]),
@@ -277,7 +277,7 @@ export const PlayerOverlay = ({
     );
 
     return {
-      left: interpolate(progress.value, [0, 1], [windowWidth - 104, windowWidth / 2 - 26]),
+      left: interpolate(progress.value, [0, 1], [windowWidth - 136, windowWidth / 2 - 26]),
       top: interpolate(progress.value, [0, 1], [3, fullCenter - 26]),
       width: interpolate(progress.value, [0, 1], [48, 52]),
       opacity: trackTransition.value,
@@ -291,7 +291,7 @@ export const PlayerOverlay = ({
     );
 
     return {
-      left: interpolate(progress.value, [0, 1], [windowWidth - 56, windowWidth - 88]),
+      left: interpolate(progress.value, [0, 1], [windowWidth - 88, windowWidth - 88]),
       top: interpolate(progress.value, [0, 1], [7, fullCenter - 22]),
       opacity: trackTransition.value,
     };
