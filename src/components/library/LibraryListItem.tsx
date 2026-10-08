@@ -6,12 +6,14 @@ export const LibraryListItem = ({
   title,
   icon,
   isLast,
+  onPress,
 }: {
   title: string;
   icon: ComponentProps<typeof Ionicons>['name'];
   isLast: boolean;
+  onPress: () => void;
 }) => (
-  <TouchableOpacity className="flex-row items-center pl-5 active:bg-zinc-900">
+  <TouchableOpacity onPress={onPress} className="flex-row items-center pl-5 active:bg-zinc-900">
     <View className="w-10 items-start">
       <Ionicons name={icon} size={24} color="#FA243C" />
     </View>

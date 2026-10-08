@@ -5,10 +5,12 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { tracks } from './src/data/tracks';
 import { CustomTabBar } from './src/components/navigation/CustomTabBar';
 import { PlayerOverlay } from './src/components/player/PlayerOverlay';
+import { PlaybackContext } from './src/contexts/PlaybackContext';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { LibraryScreen } from './src/screens/LibraryScreen';
 import { RadioScreen } from './src/screens/RadioScreen';
 import { SearchScreen } from './src/screens/SearchScreen';
+import type { Track } from './src/types';
 import './styles.css';
 
 const Tab = createBottomTabNavigator();
@@ -27,20 +29,39 @@ export default function App() {
     setActiveTrackIndex((currentIndex) => (currentIndex - 1 + tracks.length) % tracks.length);
   };
 
+  const playbackActions = {
+    playTrack: (track: Track) => {
+      const trackIndex = tracks.findIndex((item) => item.id === track.id);
+      if (trackIndex < 0) return;
+      setActiveTrackIndex(trackIndex);
+      setIsPlaying(true);
+    },
+    playAllSongs: () => {
+      setActiveTrackIndex(0);
+      setIsPlaying(true);
+    },
+    shuffleSongs: () => {
+      setActiveTrackIndex(Math.floor(Math.random() * tracks.length));
+      setIsPlaying(true);
+    },
+  };
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <NavigationContainer>
-        <Tab.Navigator
-          tabBar={(props) => <CustomTabBar {...props} />}
-          screenOptions={{ headerShown: false }}
-          initialRouteName="Library"
-        >
-          <Tab.Screen name="Home" component={HomeScreen} />
-          <Tab.Screen name="Radio" component={RadioScreen} />
-          <Tab.Screen name="Library" component={LibraryScreen} />
-          <Tab.Screen name="Search" component={SearchScreen} />
-        </Tab.Navigator>
-      </NavigationContainer>
+      <PlaybackContext.Provider value={playbackActions}>
+        <NavigationContainer>
+          <Tab.Navigator
+            tabBar={(props) => <CustomTabBar {...props} />}
+            screenOptions={{ headerShown: false }}
+            initialRouteName="Library"
+          >
+            <Tab.Screen name="Home" component={HomeScreen} />
+            <Tab.Screen name="Radio" component={RadioScreen} />
+            <Tab.Screen name="Library" component={LibraryScreen} />
+            <Tab.Screen name="Search" component={SearchScreen} />
+          </Tab.Navigator>
+        </NavigationContainer>
+      </PlaybackContext.Provider>
       <PlayerOverlay
         visible={playerVisible}
         track={activeTrack}

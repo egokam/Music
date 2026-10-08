@@ -19,4 +19,15 @@ export const tracks: Track[] = [
     artwork:
       'https://images.unsplash.com/photo-1511379938547-c1f69419868d?w=900&q=85',
   },
+  ...Array.from({ length: 10 }, (_, index): Track => ({
+    id: `ghost-test-${index + 1}`,
+    title: `Ghost Song ${String(index + 1).padStart(2, '0')}`,
+    artist: 'Musiqapp Test Library',
+    album: 'Scroll Test',
+    duration: '3:30',
+    artwork:
+      index % 2 === 0
+        ? 'https://images.unsplash.com/photo-1519608487953-e999c86e7455?w=900&q=85'
+        : 'https://images.unsplash.com/photo-1511379938547-c1f69419868d?w=900&q=85',
+  })),
 ];
