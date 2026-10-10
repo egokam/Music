@@ -1,26 +1,110 @@
-import { useMemo, useRef, useState } from 'react';
-import { Animated, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Animated, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AlphabetIndex } from '../components/songs/AlphabetIndex';
-import { SongListItem } from '../components/songs/SongListItem';
+import { SongListItem, type SongMenuAnchor } from '../components/songs/SongListItem';
 import { SongsControls } from '../components/songs/SongsControls';
 import { SongsHeader } from '../components/songs/SongsHeader';
-import { tracks } from '../data/tracks';
-import type { Track } from '../types';
+import { TrackActionsSheet } from '../components/songs/TrackActionsSheet';
+import type { PlaylistSummary, Track } from '../types';
+import type { TrackEditChanges } from '../services/MusicCatalogService';
 
 type SongSection = { title: string; data: Track[] };
+type SongSortMode = 'name' | 'dateAdded' | 'artist';
+
+const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
+
+const normalizeSearchText = (value: string) => value.normalize('NFKD').replace(/\p{M}/gu, '').toLocaleLowerCase();
+
+const getSectionTitle = (value: string) => {
+  const firstVisibleCharacter = Array.from(value.normalize('NFKC').trim())
+    .find((character) => !/[\p{M}\p{Cf}]/u.test(character));
+  return firstVisibleCharacter && /\p{L}/u.test(firstVisibleCharacter)
+    ? firstVisibleCharacter.toLocaleUpperCase()
+    : '#';
+};
+
+const getDateAddedTimestamp = (track: Track) => {
+  if (typeof track.dateAdded === 'number') return Number.isFinite(track.dateAdded) ? track.dateAdded : null;
+  if (typeof track.dateAdded === 'string') {
+    const timestamp = Date.parse(track.dateAdded);
+    return Number.isFinite(timestamp) ? timestamp : null;
+  }
+  return null;
+};
 
 export const SongsScreen = ({
+  title = 'Songs',
   onBack,
   onSelectTrack,
   onPlayAll,
   onShuffle,
+  tracks,
+  apiConnected,
+  apiInitializing,
+  isLoadingTracks,
+  loadError,
+  downloadedTrackIds,
+  downloadingTrackIds,
+  onSearch,
+  onConnect,
+  onDownload,
+  onPlayNext,
+  onToggleFavorite,
+  onAddToPlaylist,
+  onCreatePlaylist,
+  onSaveTrack,
+  onDeleteTrack,
+  onDeleteDownloadedTracks,
+  onOpenAddSongs,
+  addToPlaylistMode = false,
+  addedPlaylistTrackIds = [],
+  addingPlaylistTrackIds = [],
+  onAddPlaylistTrack,
+  playlists = [],
+  hasActiveTrack = false,
+  offlineMode = false,
+  showTrackActions = true,
+  playlistMode = false,
+  onRemoveFromPlaylist,
+  emptyMessage = 'No songs found',
 }: {
+  title?: string;
   onBack: () => void;
-  onSelectTrack: (track: Track) => void;
-  onPlayAll: () => void;
-  onShuffle: () => void;
+  onSelectTrack: (track: Track, queue?: Track[]) => void;
+  onPlayAll: (queue?: Track[]) => void;
+  onShuffle: (queue?: Track[]) => void;
+  tracks: Track[];
+  apiConnected: boolean;
+  apiInitializing: boolean;
+  isLoadingTracks: boolean;
+  loadError: string | null;
+  downloadedTrackIds: string[];
+  downloadingTrackIds: string[];
+  onSearch: (query?: string) => Promise<void>;
+  onConnect: (token: string) => Promise<void>;
+  onDownload: (track: Track) => Promise<Track>;
+  onPlayNext: (track: Track) => void;
+  onToggleFavorite: (track: Track) => Promise<Track>;
+  onAddToPlaylist: (playlistId: string, track: Track) => Promise<void>;
+  onCreatePlaylist: (name: string) => Promise<PlaylistSummary>;
+  onSaveTrack: (track: Track, changes: TrackEditChanges) => Promise<void>;
+  onDeleteTrack: (track: Track) => Promise<void>;
+  onDeleteDownloadedTracks?: (trackIds: string[]) => Promise<number>;
+  onOpenAddSongs?: () => void;
+  addToPlaylistMode?: boolean;
+  addedPlaylistTrackIds?: string[];
+  addingPlaylistTrackIds?: string[];
+  onAddPlaylistTrack?: (track: Track) => Promise<void>;
+  playlists?: PlaylistSummary[];
+  hasActiveTrack?: boolean;
+  offlineMode?: boolean;
+  showTrackActions?: boolean;
+  playlistMode?: boolean;
+  onRemoveFromPlaylist?: (track: Track) => Promise<void>;
+  emptyMessage?: string;
 }) => {
   const listRef = useRef<Animated.SectionList<Track, SongSection>>(null);
   const scrollY = useMemo(() => new Animated.Value(0), []);
@@ -28,28 +112,132 @@ export const SongsScreen = ({
   const topInsetCompensation = Math.max(0, insets.top - 24);
   const [search, setSearch] = useState('');
   const [ascending, setAscending] = useState(true);
+  const [sortMode, setSortMode] = useState<SongSortMode>('name');
+  const [pairingCode, setPairingCode] = useState('');
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState(false);
+  const [selectedTrack, setSelectedTrack] = useState<{ track: Track; anchor: SongMenuAnchor } | null>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedDownloadIds, setSelectedDownloadIds] = useState<Set<string>>(() => new Set());
+  const [deletingSelected, setDeletingSelected] = useState(false);
+  const [freedStorageMessage, setFreedStorageMessage] = useState<string | null>(null);
+  const freedMessageTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (freedMessageTimeout.current) clearTimeout(freedMessageTimeout.current);
+  }, []);
+
+  useEffect(() => {
+    if (!apiConnected) return;
+    const timeout = setTimeout(() => void onSearch(search), 250);
+    return () => clearTimeout(timeout);
+  }, [apiConnected, onSearch, search]);
 
   const sections = useMemo(() => {
-    const normalizedSearch = search.trim().toLowerCase();
+    const normalizedSearch = normalizeSearchText(search.trim());
     const filteredTracks = tracks.filter((track) =>
-      `${track.title} ${track.artist} ${track.album}`.toLowerCase().includes(normalizedSearch),
+      normalizeSearchText(`${track.title} ${track.artist} ${track.album}`).includes(normalizedSearch),
     );
-    filteredTracks.sort((first, second) => {
-      const order = first.title.toLowerCase().localeCompare(second.title.toLowerCase());
-      return ascending ? order : -order;
-    });
+
+    const catalogOrder = new Map(tracks.map((track, index) => [track.id, index]));
+    if (sortMode === 'dateAdded') {
+      const allTracksHaveDates = filteredTracks.every((track) => getDateAddedTimestamp(track) !== null);
+      filteredTracks.sort((first, second) => {
+        const firstDate = getDateAddedTimestamp(first);
+        const secondDate = getDateAddedTimestamp(second);
+        const order = allTracksHaveDates && firstDate !== null && secondDate !== null
+          ? firstDate - secondDate
+          : (catalogOrder.get(first.id) ?? 0) - (catalogOrder.get(second.id) ?? 0);
+        return ascending ? order : -order;
+      });
+    } else {
+      const sortValue = (track: Track) => sortMode === 'artist' ? track.artist : track.title;
+      filteredTracks.sort((first, second) => {
+        const firstValue = sortValue(first);
+        const secondValue = sortValue(second);
+        const firstSection = getSectionTitle(firstValue);
+        const secondSection = getSectionTitle(secondValue);
+        let order = 0;
+
+        if (firstSection === '#' && secondSection !== '#') order = 1;
+        else if (firstSection !== '#' && secondSection === '#') order = -1;
+        else order = collator.compare(firstSection, secondSection);
+
+        if (order === 0) order = collator.compare(firstValue, secondValue);
+        if (order === 0 && sortMode === 'artist') order = collator.compare(first.title, second.title);
+        return ascending ? order : -order;
+      });
+    }
 
     const groups = new Map<string, Track[]>();
     filteredTracks.forEach((track) => {
-      const firstCharacter = track.title.trim().charAt(0).toUpperCase();
-      const sectionTitle = /^[A-Z]$/.test(firstCharacter) ? firstCharacter : '#';
+      const sectionTitle = sortMode === 'dateAdded'
+        ? 'Recently Added'
+        : getSectionTitle(sortMode === 'artist' ? track.artist : track.title);
       const currentSongs = groups.get(sectionTitle) ?? [];
       currentSongs.push(track);
       groups.set(sectionTitle, currentSongs);
     });
 
     return Array.from(groups, ([title, data]) => ({ title, data }));
-  }, [ascending, search]);
+  }, [ascending, search, sortMode, tracks]);
+  const playQueue = useMemo(() => sections.flatMap((section) => section.data), [sections]);
+
+  const downloadIds = useMemo(() => new Set(downloadedTrackIds), [downloadedTrackIds]);
+  const downloadingIds = useMemo(() => new Set(downloadingTrackIds), [downloadingTrackIds]);
+  const addedPlaylistIds = useMemo(() => new Set(addedPlaylistTrackIds), [addedPlaylistTrackIds]);
+  const addingPlaylistIds = useMemo(() => new Set(addingPlaylistTrackIds), [addingPlaylistTrackIds]);
+  const allDownloadsSelected = tracks.length > 0 && selectedDownloadIds.size === tracks.length;
+
+  const toggleSelectAllDownloads = () => {
+    if (allDownloadsSelected) {
+      setSelectedDownloadIds(new Set());
+      return;
+    }
+    setSelectedDownloadIds(new Set(tracks.map((track) => track.id)));
+  };
+
+  const deleteSelectedDownloads = async () => {
+    if (!onDeleteDownloadedTracks || selectedDownloadIds.size === 0 || deletingSelected) return;
+    setDeletingSelected(true);
+    try {
+      const freedBytes = await onDeleteDownloadedTracks([...selectedDownloadIds]);
+      setSelectionMode(false);
+      setSelectedDownloadIds(new Set());
+      setFreedStorageMessage(`${(freedBytes / (1024 * 1024)).toFixed(2)} MB has been freed`);
+      if (freedMessageTimeout.current) clearTimeout(freedMessageTimeout.current);
+      freedMessageTimeout.current = setTimeout(() => setFreedStorageMessage(null), 1000);
+    } catch (error) {
+      Alert.alert('Could not delete downloads', error instanceof Error ? error.message : 'Please try again.');
+    } finally {
+      setDeletingSelected(false);
+    }
+  };
+
+  const cancelDownloadSelection = () => {
+    setSelectionMode(false);
+    setSelectedDownloadIds(new Set());
+  };
+
+  const download = async (track: Track) => {
+    try {
+      await onDownload(track);
+    } catch (error) {
+      Alert.alert('Download failed', error instanceof Error ? error.message : 'Could not save this track.');
+    }
+  };
+
+  const connect = async () => {
+    setConnecting(true);
+    setConnectionError(null);
+    try {
+      await onConnect(pairingCode);
+    } catch (error) {
+      setConnectionError(error instanceof Error ? error.message : 'Could not connect to your VPS library.');
+    } finally {
+      setConnecting(false);
+    }
+  };
 
   const jumpToLetter = (letter: string) => {
     if (sections.length === 0) return;
@@ -78,6 +266,63 @@ export const SongsScreen = ({
     extrapolate: 'clamp',
   });
 
+  if (apiInitializing) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: '#000000', alignItems: 'center', justifyContent: 'center' }}>
+        <ActivityIndicator color="#FA243C" />
+      </SafeAreaView>
+    );
+  }
+
+  if (!apiConnected && !offlineMode) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: '#000000' }} edges={['top']}>
+        <SongsHeader onBack={onBack} onToggleSort={() => undefined} />
+        <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 28, paddingBottom: 90 }}>
+          <Text style={{ color: 'white', fontSize: 34, fontWeight: '800', marginBottom: 12 }}>{title}</Text>
+          <Text style={{ color: '#A1A1A6', fontSize: 16, lineHeight: 23, marginBottom: 22 }}>
+            Connect to your private music folder on the VPS. Find the pairing code in the project’s .env.local file.
+          </Text>
+          <TextInput
+            value={pairingCode}
+            onChangeText={setPairingCode}
+            placeholder="Library pairing code"
+            placeholderTextColor="#8E8E93"
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry
+            style={{
+              height: 52,
+              borderRadius: 16,
+              paddingHorizontal: 16,
+              color: 'white',
+              backgroundColor: '#1C1C1E',
+              fontSize: 16,
+              marginBottom: 14,
+            }}
+          />
+          <TouchableOpacity
+            onPress={() => void connect()}
+            disabled={connecting || !pairingCode.trim()}
+            style={{
+              height: 52,
+              borderRadius: 16,
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: '#FA243C',
+              opacity: connecting || !pairingCode.trim() ? 0.55 : 1,
+            }}
+          >
+            {connecting ? <ActivityIndicator color="white" /> : <Text style={{ color: 'white', fontSize: 17, fontWeight: '700' }}>Connect</Text>}
+          </TouchableOpacity>
+          {connectionError ? (
+            <Text style={{ color: '#FA5265', fontSize: 14, marginTop: 14 }}>{connectionError}</Text>
+          ) : null}
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#000000' }} edges={['top']}>
       <View style={{ flex: 1, marginTop: -topInsetCompensation }}>
@@ -88,7 +333,24 @@ export const SongsScreen = ({
           renderItem={({ item, index, section }) => (
             <SongListItem
               track={item}
-              onPress={() => onSelectTrack(item)}
+              onPress={() => onSelectTrack(item, playQueue)}
+              onDownload={() => void download(item)}
+              addMode={addToPlaylistMode}
+              alreadyAdded={addedPlaylistIds.has(item.id)}
+              adding={addingPlaylistIds.has(item.id)}
+              onAddToPlaylist={() => onAddPlaylistTrack?.(item)}
+              selectionMode={selectionMode}
+              selected={selectedDownloadIds.has(item.id)}
+              onToggleSelected={() => setSelectedDownloadIds((current) => {
+                const next = new Set(current);
+                if (next.has(item.id)) next.delete(item.id);
+                else next.add(item.id);
+                return next;
+              })}
+              onMore={showTrackActions ? (anchor) => setSelectedTrack({ track: item, anchor }) : undefined}
+              showMore={showTrackActions}
+              downloaded={downloadIds.has(item.id)}
+              downloading={downloadingIds.has(item.id)}
               isLast={index === section.data.length - 1}
             />
           )}
@@ -111,13 +373,15 @@ export const SongsScreen = ({
             <SongsControls
               search={search}
               onSearchChange={setSearch}
-              onPlay={onPlayAll}
-              onShuffle={onShuffle}
+              onPlay={() => onPlayAll(playQueue)}
+              onShuffle={() => onShuffle(playQueue)}
             />
           }
           ListEmptyComponent={
             <View style={{ paddingHorizontal: 20, paddingTop: 22 }}>
-              <Text style={{ color: '#8E8E93', fontSize: 16 }}>No songs found</Text>
+              <Text style={{ color: '#8E8E93', fontSize: 16 }}>
+                {isLoadingTracks ? 'Loading your music…' : loadError ?? emptyMessage}
+              </Text>
             </View>
           }
           stickySectionHeadersEnabled={false}
@@ -126,7 +390,7 @@ export const SongsScreen = ({
           onScroll={scrollHandler}
           scrollEventThrottle={16}
           style={StyleSheet.absoluteFill}
-          contentContainerStyle={{ paddingTop: 58, paddingBottom: 190 }}
+          contentContainerStyle={{ paddingTop: 58, paddingBottom: selectionMode ? 276 : 190 }}
           initialNumToRender={12}
           windowSize={7}
         />
@@ -175,7 +439,7 @@ export const SongsScreen = ({
             }}
           >
             <Text style={{ color: 'white', fontSize: 38, lineHeight: 46, fontWeight: '800' }}>
-              Songs
+              {title}
             </Text>
           </View>
         </Animated.View>
@@ -183,9 +447,169 @@ export const SongsScreen = ({
         <SongsHeader
           onBack={onBack}
           onToggleSort={() => setAscending((value) => !value)}
+          sortAccessibilityLabel="Reverse song order"
+          moreMenuItems={[
+            ...(title === 'Songs' ? [
+              {
+                label: 'Name A–Z–#',
+                icon: sortMode === 'name' && ascending ? 'checkmark' as const : 'radio-button-off' as const,
+                onPress: () => { setSortMode('name'); setAscending(true); },
+              },
+              {
+                label: 'Name #–A–Z',
+                icon: sortMode === 'name' && !ascending ? 'checkmark' as const : 'radio-button-off' as const,
+                onPress: () => { setSortMode('name'); setAscending(false); },
+              },
+              {
+                label: 'Date Added',
+                icon: sortMode === 'dateAdded' ? 'checkmark' as const : 'radio-button-off' as const,
+                onPress: () => { setSortMode('dateAdded'); setAscending(false); },
+              },
+              {
+                label: 'Artist',
+                icon: sortMode === 'artist' ? 'checkmark' as const : 'radio-button-off' as const,
+                onPress: () => { setSortMode('artist'); setAscending(true); },
+              },
+            ] : []),
+            ...(onOpenAddSongs ? [{ label: 'Add a Song', icon: 'add-circle-outline' as const, onPress: onOpenAddSongs }] : []),
+            ...(onDeleteDownloadedTracks ? [{
+              label: selectionMode ? 'Cancel Selection' : 'Clear Storage',
+              icon: selectionMode ? 'close' as const : 'trash-outline' as const,
+              onPress: selectionMode ? cancelDownloadSelection : () => {
+                setSelectedDownloadIds(new Set());
+                setSelectionMode(true);
+              },
+              destructive: !selectionMode,
+            }] : []),
+          ]}
         />
         <AlphabetIndex onSelectLetter={jumpToLetter} />
+
+        {selectionMode ? (
+          <View
+            style={{
+              position: 'absolute',
+              left: 20,
+              right: 20,
+              bottom: 174,
+              minHeight: 62,
+              paddingHorizontal: 12,
+              paddingVertical: 8,
+              borderRadius: 22,
+              backgroundColor: '#1C1C1E',
+              borderWidth: 1,
+              borderColor: 'rgba(255,255,255,0.08)',
+              flexDirection: 'row',
+              alignItems: 'center',
+              zIndex: 30,
+              elevation: 30,
+            }}
+          >
+            <TouchableOpacity
+              onPress={toggleSelectAllDownloads}
+              disabled={tracks.length === 0 || deletingSelected}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: allDownloadsSelected }}
+              accessibilityLabel="Select all downloaded tracks"
+              style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', paddingVertical: 4 }}
+            >
+              <View
+                style={{
+                  width: 23,
+                  height: 23,
+                  borderRadius: 12,
+                  borderWidth: allDownloadsSelected ? 0 : 2,
+                  borderColor: '#8E8E93',
+                  backgroundColor: allDownloadsSelected ? '#FA243C' : 'transparent',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginRight: 9,
+                }}
+              >
+                {allDownloadsSelected ? <Ionicons name="checkmark" size={16} color="white" /> : null}
+              </View>
+              <View style={{ minWidth: 0 }}>
+                <Text numberOfLines={1} style={{ color: 'white', fontSize: 14, fontWeight: '700' }}>Select All</Text>
+                <Text numberOfLines={1} style={{ color: '#8E8E93', fontSize: 12, marginTop: 2 }}>
+                  {selectedDownloadIds.size} selected
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={cancelDownloadSelection}
+              disabled={deletingSelected}
+              accessibilityRole="button"
+              accessibilityLabel="Cancel selection"
+              style={{ minHeight: 40, paddingHorizontal: 10, justifyContent: 'center' }}
+            >
+              <Text style={{ color: '#D1D1D6', fontSize: 14, fontWeight: '600' }}>Cancel</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => void deleteSelectedDownloads()}
+              disabled={selectedDownloadIds.size === 0 || deletingSelected}
+              accessibilityRole="button"
+              accessibilityLabel={`Delete ${selectedDownloadIds.size} selected downloads`}
+              style={{
+                minWidth: 82,
+                minHeight: 40,
+                paddingHorizontal: 13,
+                borderRadius: 20,
+                backgroundColor: '#FA243C',
+                alignItems: 'center',
+                justifyContent: 'center',
+                opacity: selectedDownloadIds.size === 0 || deletingSelected ? 0.42 : 1,
+              }}
+            >
+              {deletingSelected ? <ActivityIndicator size="small" color="white" /> : (
+                <Text style={{ color: 'white', fontSize: 14, fontWeight: '700' }}>Delete</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        {freedStorageMessage ? (
+          <View
+            pointerEvents="none"
+            accessibilityRole="alert"
+            style={{
+              position: 'absolute',
+              alignSelf: 'center',
+              bottom: 174,
+              paddingHorizontal: 16,
+              paddingVertical: 11,
+              borderRadius: 24,
+              backgroundColor: '#303034',
+              borderWidth: 1,
+              borderColor: 'rgba(255,255,255,0.10)',
+              zIndex: 35,
+              elevation: 35,
+            }}
+          >
+            <Text style={{ color: 'white', fontSize: 14, fontWeight: '700' }}>{freedStorageMessage}</Text>
+          </View>
+        ) : null}
       </View>
+      {selectedTrack ? (
+        <TrackActionsSheet
+          key={selectedTrack.track.id}
+          track={selectedTrack.track}
+          anchor={selectedTrack.anchor}
+          playlistMode={playlistMode}
+          visible
+          playlists={playlists}
+          hasActiveTrack={hasActiveTrack}
+          onClose={() => setSelectedTrack(null)}
+          onPlayNext={onPlayNext}
+          onToggleFavorite={onToggleFavorite}
+          onAddToPlaylist={onAddToPlaylist}
+          onCreatePlaylist={onCreatePlaylist}
+          onSaveTrack={onSaveTrack}
+          onDeleteTrack={onDeleteTrack}
+          onRemoveFromPlaylist={onRemoveFromPlaylist}
+        />
+      ) : null}
     </SafeAreaView>
   );
 };

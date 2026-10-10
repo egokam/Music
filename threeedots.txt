@@ -1,0 +1,7 @@
+btw for the three dots beside tracks i want to add these options and make them all actually working: 
+
+edit: it shows a page or popup minipage that can edit cover or name or artist name or lyrics of the song, with a save and discard buttons, if saved this should be applied on the vps btw.
+delete: it deletes the track immediatly from server database, "offer an are you sure popup to prevent accident actions"
+star: it added the track to favourites, btw try to add a favourites sections beside songs/downloader... make it instead of genres, this page matches the global styles and it shows the starred music traks, and btw make the star button on the miniplayer do this as well
+play next: make this song the next to be played, "this option is clickable just if the player already playing a song"
+add to playlist: it added this song to a playlist, if no playlist existed show a +button so the user can creates it, this needs you to build the playlists section as well matching the style

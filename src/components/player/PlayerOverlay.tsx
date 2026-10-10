@@ -2,45 +2,103 @@
 /* eslint-disable react-hooks/immutability, react-hooks/refs */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BackHandler, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
+import { BackHandler, Text, TouchableOpacity, View, useWindowDimensions, type GestureResponderEvent } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { scheduleOnRN } from 'react-native-worklets';
 import ReanimatedAnimated, { cancelAnimation, interpolate, interpolateColor, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
+import { getMusicApiHeaders } from '../../services/MusicCatalogService';
+import { PlayerLyrics } from './PlayerLyrics';
+import { PlayerOutputRouteButton } from './PlayerOutputRouteButton';
+import { PlayerQueuePanel } from './PlayerQueuePanel';
+import { PlayerSlider } from './PlayerSlider';
 import type { Track } from '../../types';
 
 export const PlayerOverlay = ({
   visible,
   track,
+  isFavorite,
   isPlaying,
+  currentTime,
+  durationSeconds,
+  volume,
+  queue,
+  shuffleEnabled,
+  repeatMode,
+  autoplayEnabled,
   onOpen,
   onClose,
   onTogglePlayback,
   onSkipPrevious,
   onSkipNext,
+  onSeek,
+  onVolumeChange,
+  onToggleFavorite,
+  onPlayQueueTrack,
+  onToggleShuffle,
+  onToggleRepeat,
+  onToggleAutoplay,
+  onClearQueue,
 }: {
   visible: boolean;
   track: Track;
+  isFavorite: boolean;
   isPlaying: boolean;
+  currentTime: number;
+  durationSeconds: number;
+  volume: number;
+  queue: Track[];
+  shuffleEnabled: boolean;
+  repeatMode: 'off' | 'all' | 'one';
+  autoplayEnabled: boolean;
   onOpen: () => void;
   onClose: () => void;
   onTogglePlayback: () => void;
   onSkipPrevious: () => void;
   onSkipNext: () => void;
+  onSeek: (seconds: number) => void;
+  onVolumeChange: (volume: number) => void;
+  onToggleFavorite: () => void;
+  onPlayQueueTrack: (track: Track) => void;
+  onToggleShuffle: () => void;
+  onToggleRepeat: () => void;
+  onToggleAutoplay: () => void;
+  onClearQueue: () => void;
 }) => {
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const progress = useSharedValue(0);
   const gestureStartProgress = useSharedValue(1);
   const gestureChanged = useSharedValue(false);
+  const gestureStartedOnMiniPlaybackControl = useSharedValue(false);
   const lyricsProgress = useSharedValue(0);
+  const queueContentProgress = useSharedValue(0);
   const trackTransition = useSharedValue(1);
   const trackTransitionGeneration = useRef(0);
+  const onOpenRef = useRef(onOpen);
   const onCloseRef = useRef(onClose);
+  const skipNextOpenAnimation = useRef(false);
   const [displayTrack, setDisplayTrack] = useState(track);
+  const renderedTrack = displayTrack.id === track.id ? track : displayTrack;
   const [lyricsView, setLyricsView] = useState({ trackId: track.id, expanded: false });
-  const lyricsExpanded = lyricsView.trackId === displayTrack.id && lyricsView.expanded;
-  const lyrics = displayTrack.lyrics ?? [];
-  const hasLyrics = lyrics.some((line) => line.trim().length > 0);
+  const [queueView, setQueueView] = useState({ trackId: track.id, expanded: false });
+  const lyricsExpanded = lyricsView.trackId === renderedTrack.id && lyricsView.expanded;
+  const queueExpanded = queueView.trackId === renderedTrack.id && queueView.expanded;
+  const lyrics = renderedTrack.lyrics ?? [];
+  const hasLyrics = lyrics.some((line) => line.text.trim().length > 0);
+  const detailsExpanded = (lyricsExpanded && hasLyrics) || queueExpanded;
+  const elapsedSeconds = Math.max(0, currentTime);
+  const totalSeconds = Math.max(0, durationSeconds);
+  const remainingSeconds = Math.max(0, totalSeconds - elapsedSeconds);
+  const formatTime = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
+  const activeLyricIndex = lyrics.reduce((activeIndex, line, index) =>
+    line.text.trim().length > 0 && line.timeMs !== null && line.timeMs <= elapsedSeconds * 1000
+      ? index
+      : activeIndex,
+  -1);
+  const activeQueueIndex = queue.findIndex((item) => item.id === renderedTrack.id);
+  const upcomingTracks = activeQueueIndex >= 0
+    ? queue.slice(activeQueueIndex + 1)
+    : queue.filter((item) => item.id !== renderedTrack.id);
 
   const miniTop = Math.max(0, windowHeight - 160);
   const miniBottom = Math.max(0, windowHeight - miniTop - 58);
@@ -52,15 +110,13 @@ export const PlayerOverlay = ({
   const lyricsArtworkTop = 154;
   const lyricsTitleTop = lyricsArtworkTop + 12;
   const lyricsTextTop = lyricsArtworkTop + 72 + 28;
-  const lyricsHeight = lyrics.reduce(
-    (height, line) => height + (line.trim().length > 0 ? 44 : 40),
-    0,
-  );
-  const lyricsProgressTop = Math.min(
-    lyricsTextTop + lyricsHeight + 24,
-    Math.max(lyricsTextTop + 44 + 24, windowHeight - 260),
-  );
+  const lyricsProgressTop = Math.max(lyricsTextTop + 44 + 24, windowHeight - 260);
+  const lyricsViewportHeight = Math.max(0, lyricsProgressTop - lyricsTextTop - 24);
   const lyricsControlsCenter = lyricsProgressTop + 32 + 28 + 24;
+
+  useEffect(() => {
+    onOpenRef.current = onOpen;
+  }, [onOpen]);
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -93,6 +149,11 @@ export const PlayerOverlay = ({
       return;
     }
 
+    if (skipNextOpenAnimation.current) {
+      skipNextOpenAnimation.current = false;
+      return;
+    }
+
     progress.value = withSpring(1, {
       stiffness: 210,
       damping: 29,
@@ -101,18 +162,47 @@ export const PlayerOverlay = ({
   }, [visible, progress]);
 
   useEffect(() => {
-    lyricsProgress.value = withTiming(lyricsExpanded && hasLyrics ? 1 : 0, {
+    lyricsProgress.value = withTiming(detailsExpanded ? 1 : 0, {
       duration: 220,
     });
-  }, [hasLyrics, lyricsExpanded, lyricsProgress]);
+  }, [detailsExpanded, lyricsProgress]);
+
+  useEffect(() => {
+    queueContentProgress.value = withTiming(queueExpanded ? 1 : 0, { duration: 180 });
+  }, [queueContentProgress, queueExpanded]);
 
   useEffect(() => {
     lyricsProgress.value = withTiming(0, { duration: 0 });
-  }, [displayTrack.id, lyricsProgress]);
+    queueContentProgress.value = withTiming(0, { duration: 0 });
+  }, [displayTrack.id, lyricsProgress, queueContentProgress]);
 
   const closeOnJS = useCallback(() => {
     onCloseRef.current();
   }, []);
+
+  const openAfterGesture = useCallback(() => {
+    skipNextOpenAnimation.current = true;
+    onOpenRef.current();
+  }, []);
+
+  const handleMiniSurfacePress = useCallback((event: GestureResponderEvent) => {
+    if (visible) return;
+
+    const { locationX, locationY } = event.nativeEvent;
+    const isMiniControlRow = locationY >= -4 && locationY <= 58;
+    const playLeft = windowWidth - 144;
+    const nextLeft = windowWidth - 88;
+    if (isMiniControlRow && locationX >= playLeft - 8 && locationX <= playLeft + 56) {
+      onTogglePlayback();
+      return;
+    }
+    if (isMiniControlRow && locationX >= nextLeft - 8 && locationX <= nextLeft + 52) {
+      onSkipNext();
+      return;
+    }
+
+    onOpenRef.current();
+  }, [onSkipNext, onTogglePlayback, visible, windowWidth]);
 
   const closeWithAnimation = useCallback(
     (velocityY = 0) => {
@@ -157,48 +247,118 @@ export const PlayerOverlay = ({
     [collapseDistance, progress],
   );
 
+  const restoreMiniPlayer = useCallback(
+    (velocityY = 0) => {
+      'worklet';
+      progress.value = withSpring(0, {
+        stiffness: 210,
+        damping: 29,
+        mass: 0.9,
+        velocity: -velocityY / collapseDistance,
+      });
+    },
+    [collapseDistance, progress],
+  );
+
+  const openWithAnimation = useCallback(
+    (velocityY = 0) => {
+      'worklet';
+      progress.value = withSpring(
+        1,
+        {
+          stiffness: 210,
+          damping: 29,
+          mass: 0.9,
+          velocity: -velocityY / collapseDistance,
+        },
+        (finished) => {
+          if (finished) scheduleOnRN(openAfterGesture);
+        },
+      );
+    },
+    [collapseDistance, openAfterGesture, progress],
+  );
+
+  const detailsScrollGesture = useMemo(
+    () => Gesture.Native().enabled(visible && detailsExpanded),
+    [detailsExpanded, visible],
+  );
+
   const panGesture = useMemo(
     () =>
       Gesture.Pan()
         .activeOffsetY(8)
         .failOffsetX([-12, 12])
-        .onBegin(() => {
+        .requireExternalGestureToFail(detailsScrollGesture)
+        .onBegin((event) => {
+          gestureStartedOnMiniPlaybackControl.value = !visible && event.y <= 60 &&
+            event.x >= windowWidth - 152 && event.x <= windowWidth - 36;
+        })
+        .onStart(() => {
+          if (gestureStartedOnMiniPlaybackControl.value) return;
+          cancelAnimation(progress);
           gestureChanged.value = false;
           gestureStartProgress.value = progress.value;
         })
         .onUpdate((event) => {
-          const pullDistance = Math.max(0, event.translationY);
-          if (pullDistance > 0) {
+          if (gestureStartedOnMiniPlaybackControl.value) return;
+          if (Math.abs(event.translationY) > 0) {
             gestureChanged.value = true;
             progress.value = Math.max(
               0,
-              Math.min(1, gestureStartProgress.value - pullDistance / collapseDistance),
+              Math.min(1, gestureStartProgress.value - event.translationY / collapseDistance),
             );
           }
         })
         .onEnd((event) => {
-          const pullDistance = Math.max(0, event.translationY);
-          if (pullDistance <= 0) return;
+          if (gestureStartedOnMiniPlaybackControl.value) return;
+          const translationY = event.translationY;
+          const startProgress = gestureStartProgress.value;
 
-          if (pullDistance > 110 || event.velocityY > 950) {
-            closeWithAnimation(event.velocityY);
-          } else {
-            restoreExpandedPlayer(event.velocityY);
+          if (translationY > 0) {
+            if (translationY > 110 || (translationY > 40 && event.velocityY > 950)) {
+              closeWithAnimation(event.velocityY);
+            } else if (startProgress >= 0.5) {
+              restoreExpandedPlayer(event.velocityY);
+            } else {
+              restoreMiniPlayer(event.velocityY);
+            }
+          } else if (translationY < 0) {
+            if (translationY < -110 || (translationY < -40 && event.velocityY < -950)) {
+              openWithAnimation(event.velocityY);
+            } else if (startProgress >= 0.5) {
+              restoreExpandedPlayer(event.velocityY);
+            } else {
+              restoreMiniPlayer(event.velocityY);
+            }
           }
         })
         .onFinalize((_event, success) => {
-          if (visible && !success && gestureChanged.value && progress.value < 1) {
-            restoreExpandedPlayer();
+          if (gestureStartedOnMiniPlaybackControl.value) {
+            gestureStartedOnMiniPlaybackControl.value = false;
+            return;
+          }
+          if (!success && gestureChanged.value) {
+            if (gestureStartProgress.value >= 0.5) {
+              restoreExpandedPlayer();
+            } else {
+              restoreMiniPlayer();
+            }
           }
         }),
     [
       closeWithAnimation,
       collapseDistance,
       gestureChanged,
+      gestureStartedOnMiniPlaybackControl,
       gestureStartProgress,
+      detailsScrollGesture,
+      openWithAnimation,
       progress,
       restoreExpandedPlayer,
+      restoreMiniPlayer,
       visible,
+      windowWidth,
     ],
   );
 
@@ -277,7 +437,7 @@ export const PlayerOverlay = ({
     );
 
     return {
-      left: interpolate(progress.value, [0, 1], [windowWidth - 136, windowWidth / 2 - 26]),
+      left: interpolate(progress.value, [0, 1], [windowWidth - 144, windowWidth / 2 - 26]),
       top: interpolate(progress.value, [0, 1], [3, fullCenter - 26]),
       width: interpolate(progress.value, [0, 1], [48, 52]),
       opacity: trackTransition.value,
@@ -328,15 +488,30 @@ export const PlayerOverlay = ({
     height: interpolate(
       lyricsProgress.value,
       [0, 1],
-      [0, Math.max(0, lyricsProgressTop - lyricsTextTop - 24)],
+                  [0, lyricsViewportHeight],
     ),
-    opacity: lyricsProgress.value,
+    opacity: lyricsProgress.value * (1 - queueContentProgress.value),
+  }));
+  const queuePanelStyle = useAnimatedStyle(() => ({
+    top: lyricsTextTop,
+    height: interpolate(
+      lyricsProgress.value,
+      [0, 1],
+      [0, lyricsViewportHeight],
+    ),
+    opacity: lyricsProgress.value * queueContentProgress.value,
   }));
 
   const toggleLyrics = () => {
     if (!hasLyrics) return;
     const nextExpanded = !lyricsExpanded;
-    setLyricsView({ trackId: displayTrack.id, expanded: nextExpanded });
+    setQueueView({ trackId: renderedTrack.id, expanded: false });
+    setLyricsView({ trackId: renderedTrack.id, expanded: nextExpanded });
+  };
+
+  const toggleQueue = () => {
+    setLyricsView({ trackId: renderedTrack.id, expanded: false });
+    setQueueView({ trackId: renderedTrack.id, expanded: !queueExpanded });
   };
 
   return (
@@ -376,7 +551,7 @@ export const PlayerOverlay = ({
           ]}
         >
           <ReanimatedAnimated.Image
-            source={{ uri: displayTrack.artwork }}
+            source={renderedTrack.artwork ? { uri: renderedTrack.artwork, headers: getMusicApiHeaders() } : undefined}
             resizeMode="cover"
             blurRadius={32}
             style={[
@@ -405,13 +580,18 @@ export const PlayerOverlay = ({
             ]}
           />
 
-          <TouchableOpacity
-            activeOpacity={1}
-            onPress={visible ? undefined : onOpen}
-            accessibilityRole="button"
-            accessibilityLabel={visible ? 'Full music player' : 'Open music player'}
+          <ReanimatedAnimated.View
+            pointerEvents={visible ? 'none' : 'auto'}
             style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
-          />
+          >
+            <TouchableOpacity
+              activeOpacity={1}
+              onPress={handleMiniSurfacePress}
+              accessibilityRole="button"
+              accessibilityLabel={visible ? 'Full music player' : 'Open music player'}
+              style={{ flex: 1 }}
+            />
+          </ReanimatedAnimated.View>
 
           <ReanimatedAnimated.View
             pointerEvents={visible ? 'auto' : 'none'}
@@ -426,34 +606,52 @@ export const PlayerOverlay = ({
               expandedContentStyle,
             ]}
           >
-            {lyricsExpanded && hasLyrics ? (
+            <ReanimatedAnimated.View
+              pointerEvents={visible && lyricsExpanded && hasLyrics ? 'auto' : 'none'}
+              style={[
+                { position: 'absolute', left: 30, right: 30, overflow: 'hidden' },
+                lyricsPanelStyle,
+              ]}
+            >
+              {hasLyrics ? (
               <ReanimatedAnimated.View
-                pointerEvents="none"
-                style={[
-                  { position: 'absolute', left: 30, right: 30, overflow: 'hidden' },
-                  lyricsPanelStyle,
-                ]}
+                pointerEvents="auto"
+                style={{ flex: 1 }}
               >
-                  {lyrics.map((line, index) =>
-                  line.trim().length === 0 ? (
-                    <View key={displayTrack.id + '-lyric-gap-' + index} style={{ height: 40 }} />
-                  ) : (
-                    <Text
-                      key={displayTrack.id + '-lyric-' + index}
-                      style={{
-                        color: '#FFFFFF',
-                        fontSize: 22,
-                        lineHeight: 32,
-                        fontWeight: '700',
-                        marginBottom: 12,
-                      }}
-                    >
-                      {line}
-                    </Text>
-                  ),
-                )}
+                <PlayerLyrics
+                  key={renderedTrack.id}
+                  trackId={renderedTrack.id}
+                  lyrics={lyrics}
+                  activeLineIndex={activeLyricIndex}
+                  viewportHeight={lyricsViewportHeight}
+                  scrollGesture={detailsScrollGesture}
+                  onSeek={onSeek}
+                />
               </ReanimatedAnimated.View>
-            ) : null}
+              ) : null}
+            </ReanimatedAnimated.View>
+
+            <ReanimatedAnimated.View
+              pointerEvents={visible && queueExpanded ? 'auto' : 'none'}
+              style={[
+                { position: 'absolute', left: 30, right: 30, overflow: 'hidden' },
+                queuePanelStyle,
+              ]}
+            >
+              <PlayerQueuePanel
+                tracks={upcomingTracks}
+                height={lyricsViewportHeight}
+                scrollGesture={detailsScrollGesture}
+                shuffleEnabled={shuffleEnabled}
+                repeatMode={repeatMode}
+                autoplayEnabled={autoplayEnabled}
+                onPlayTrack={onPlayQueueTrack}
+                onToggleShuffle={onToggleShuffle}
+                onToggleRepeat={onToggleRepeat}
+                onToggleAutoplay={onToggleAutoplay}
+                onClearQueue={onClearQueue}
+              />
+            </ReanimatedAnimated.View>
 
             <ReanimatedAnimated.View
               style={[
@@ -461,22 +659,19 @@ export const PlayerOverlay = ({
                 expandedProgressStyle,
               ]}
             >
-                <View
-                  style={{
-                    height: 6,
-                    borderRadius: 3,
-                    backgroundColor: 'rgba(255, 255, 255, 0.25)',
-                    overflow: 'hidden',
-                  }}
-                >
-                  <View style={{ width: '0%', height: '100%', backgroundColor: 'white' }} />
-                </View>
+                <PlayerSlider
+                  value={totalSeconds > 0 ? elapsedSeconds / totalSeconds : 0}
+                  accessibilityLabel="Playback position"
+                  activeColor="rgba(255,255,255,0.88)"
+                  disabled={totalSeconds <= 0}
+                  onSlidingComplete={(value) => onSeek(value * totalSeconds)}
+                />
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 9 }}>
                   <Text style={{ color: 'rgba(255,255,255,0.55)', fontSize: 14, fontWeight: '600' }}>
-                    0:00
+                    {formatTime(elapsedSeconds)}
                   </Text>
                   <Text style={{ color: 'rgba(255,255,255,0.55)', fontSize: 14, fontWeight: '600' }}>
-                    -{displayTrack.duration}
+                    -{formatTime(remainingSeconds)}
                   </Text>
                 </View>
             </ReanimatedAnimated.View>
@@ -525,18 +720,15 @@ export const PlayerOverlay = ({
                 <View
                   style={{
                     flex: 1,
-                    height: 6,
                     marginHorizontal: 10,
-                    borderRadius: 3,
-                    backgroundColor: 'rgba(255,255,255,0.25)',
                   }}
                 >
-                  <View
-                    style={{
-                      width: '34%',
-                      height: '100%',
-                      backgroundColor: 'rgba(255,255,255,0.68)',
-                    }}
+                  <PlayerSlider
+                    value={volume}
+                    accessibilityLabel="Playback volume"
+                    activeColor="rgba(255,255,255,0.72)"
+                    thumbAlwaysVisible
+                    onValueChange={onVolumeChange}
                   />
                 </View>
                 <Ionicons name="volume-high" size={20} color="rgba(255,255,255,0.72)" />
@@ -576,36 +768,20 @@ export const PlayerOverlay = ({
                     color={lyricsExpanded ? '#34291C' : 'rgba(255,255,255,0.68)'}
                   />
                 </TouchableOpacity>
+                <PlayerOutputRouteButton />
                 <TouchableOpacity
+                  onPress={toggleQueue}
                   accessibilityRole="button"
-                  accessibilityLabel="AirPlay output"
+                  accessibilityLabel={queueExpanded ? 'Hide queue' : 'Show queue'}
+                  accessibilityState={{ selected: queueExpanded }}
                   hitSlop={10}
-                  style={{ padding: 8 }}
-                >
-                  <Ionicons name="radio-outline" size={26} color="rgba(255,255,255,0.68)" />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  accessibilityRole="button"
-                  accessibilityLabel="Queue and shuffle"
-                  hitSlop={10}
-                  style={{ padding: 8 }}
+                  style={{
+                    padding: 8,
+                    borderRadius: 24,
+                    backgroundColor: queueExpanded ? 'rgba(255,255,255,0.16)' : 'transparent',
+                  }}
                 >
                   <Ionicons name="list" size={28} color="rgba(255,255,255,0.68)" />
-                  <View
-                    style={{
-                      position: 'absolute',
-                      top: -2,
-                      right: -2,
-                      width: 22,
-                      height: 22,
-                      borderRadius: 11,
-                      backgroundColor: 'rgba(255,255,255,0.13)',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <Ionicons name="shuffle" size={13} color="rgba(255,255,255,0.84)" />
-                  </View>
                 </TouchableOpacity>
             </ReanimatedAnimated.View>
 
@@ -637,7 +813,7 @@ export const PlayerOverlay = ({
           </ReanimatedAnimated.View>
 
           <ReanimatedAnimated.View
-            pointerEvents="none"
+            pointerEvents={visible && hasLyrics ? 'auto' : 'none'}
             style={[
               {
                 position: 'absolute',
@@ -647,12 +823,22 @@ export const PlayerOverlay = ({
               artworkStyle,
             ]}
           >
-            <ReanimatedAnimated.Image
-              source={{ uri: displayTrack.artwork }}
-              resizeMode="cover"
-              accessibilityLabel={displayTrack.album + ' album artwork'}
+            <TouchableOpacity
+              onPress={toggleLyrics}
+              disabled={!visible || !hasLyrics}
+              activeOpacity={1}
+              accessibilityRole="button"
+              accessibilityLabel={lyricsExpanded ? 'Hide lyrics' : 'Show lyrics'}
+              accessibilityState={{ disabled: !visible || !hasLyrics, selected: lyricsExpanded }}
               style={{ width: '100%', height: '100%' }}
-            />
+            >
+              <ReanimatedAnimated.Image
+                source={renderedTrack.artwork ? { uri: renderedTrack.artwork, headers: getMusicApiHeaders() } : undefined}
+                resizeMode="cover"
+                accessibilityLabel={renderedTrack.album + ' album artwork'}
+                style={{ width: '100%', height: '100%' }}
+              />
+            </TouchableOpacity>
           </ReanimatedAnimated.View>
 
           <ReanimatedAnimated.View
@@ -669,7 +855,7 @@ export const PlayerOverlay = ({
                 titleTextStyle,
               ]}
             >
-              {displayTrack.title}
+              {renderedTrack.title}
             </ReanimatedAnimated.Text>
             <ReanimatedAnimated.Text
               numberOfLines={1}
@@ -678,7 +864,7 @@ export const PlayerOverlay = ({
                 artistTextStyle,
               ]}
             >
-              {displayTrack.artist}
+              {renderedTrack.artist}
             </ReanimatedAnimated.Text>
           </ReanimatedAnimated.View>
 
@@ -697,25 +883,11 @@ export const PlayerOverlay = ({
           >
             <View style={{ position: 'absolute', right: 30, flexDirection: 'row' }}>
               <TouchableOpacity
+                onPress={onToggleFavorite}
                 hitSlop={8}
                 accessibilityRole="button"
-                accessibilityLabel="Add to favorites"
-                style={{
-                  width: 44,
-                  height: 44,
-                  borderRadius: 22,
-                  backgroundColor: 'rgba(255, 255, 255, 0.13)',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  marginRight: 8,
-                }}
-              >
-                <Ionicons name="star-outline" size={24} color="white" />
-              </TouchableOpacity>
-              <TouchableOpacity
-                hitSlop={8}
-                accessibilityRole="button"
-                accessibilityLabel="More player options"
+                accessibilityLabel={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+                accessibilityState={{ selected: isFavorite }}
                 style={{
                   width: 44,
                   height: 44,
@@ -725,7 +897,7 @@ export const PlayerOverlay = ({
                   justifyContent: 'center',
                 }}
               >
-                <Ionicons name="ellipsis-horizontal" size={22} color="white" />
+                <Ionicons name={isFavorite ? 'star' : 'star-outline'} size={24} color={isFavorite ? '#FA5265' : 'white'} />
               </TouchableOpacity>
             </View>
           </ReanimatedAnimated.View>
@@ -739,6 +911,8 @@ export const PlayerOverlay = ({
                 height: 52,
                 alignItems: 'center',
                 justifyContent: 'center',
+                zIndex: 10,
+                elevation: 20,
               },
               playStyle,
             ]}
@@ -747,6 +921,7 @@ export const PlayerOverlay = ({
               onPress={onTogglePlayback}
               accessibilityRole="button"
               accessibilityLabel={isPlaying ? 'Pause' : 'Play'}
+              hitSlop={4}
               style={{ width: '100%', height: 52, alignItems: 'center', justifyContent: 'center' }}
             >
               <ReanimatedAnimated.View style={playIconStyle}>
@@ -764,6 +939,8 @@ export const PlayerOverlay = ({
                 height: 44,
                 alignItems: 'center',
                 justifyContent: 'center',
+                zIndex: 10,
+                elevation: 20,
               },
               nextStyle,
             ]}
@@ -772,6 +949,7 @@ export const PlayerOverlay = ({
               onPress={onSkipNext}
               accessibilityRole="button"
               accessibilityLabel="Next track"
+              hitSlop={4}
               style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
             >
               <ReanimatedAnimated.View style={nextIconStyle}>
@@ -779,6 +957,25 @@ export const PlayerOverlay = ({
               </ReanimatedAnimated.View>
             </TouchableOpacity>
           </ReanimatedAnimated.View>
+
+          {visible && ((lyricsExpanded && hasLyrics) || queueExpanded) ? (
+            <TouchableOpacity
+              onPress={queueExpanded ? toggleQueue : toggleLyrics}
+              activeOpacity={1}
+              accessibilityRole="button"
+              accessibilityLabel={queueExpanded ? 'Hide queue' : 'Hide lyrics'}
+              accessibilityState={{ selected: true }}
+              hitSlop={8}
+              style={{
+                position: 'absolute',
+                left: 20,
+                top: lyricsArtworkTop - 8,
+                width: 92,
+                height: 92,
+                zIndex: 50,
+              }}
+            />
+          ) : null}
         </ReanimatedAnimated.View>
       </GestureDetector>
     </ReanimatedAnimated.View>
