@@ -1,11 +1,11 @@
 {
   "expo": {
     "name": "Musiqapp",
-    "slug": "Musiqapp",
+    "slug": "musiqapp",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "ios": {
       "bundleIdentifier": "site.egokam.musiqapp",
       "buildNumber": "1",
@@ -32,10 +32,28 @@
       [
         "expo-audio",
         {
-          "enableBackgroundPlayback": true
+          "enableBackgroundPlayback": true,
+          "recordAudioAndroid": false,
+          "microphonePermission": false
         }
       ],
-      "expo-secure-store"
-    ]
+      "expo-secure-store",
+      "expo-font",
+      "expo-asset",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Musiqapp to choose an image for your playlist cover.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "d9783c13-3b14-4014-8b3a-57aec87000e9"
+      }
+    },
+    "owner": "kotmani"
   }
 }

@@ -1,0 +1,59 @@
+name: Build iOS IPA for Sideloadly
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-unsigned-ipa:
+    runs-on: macos-26
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Generate the iOS project
+        run: npx expo prebuild --platform ios --no-install
+
+      - name: Install CocoaPods dependencies
+        run: pod install --project-directory=ios
+
+      - name: Archive an unsigned iPhone app
+        run: |
+          workspace="$(find ios -maxdepth 1 -name '*.xcworkspace' -print -quit)"
+          scheme="$(xcodebuild -list -json -workspace "$workspace" | node -e 'let input=""; process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => process.stdout.write(JSON.parse(input).workspace.schemes[0]));')"
+
+          xcodebuild \
+            -workspace "$workspace" \
+            -scheme "$scheme" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$PWD/build/Musiqapp.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            archive
+
+          app_path="$(find build/Musiqapp.xcarchive/Products/Applications -maxdepth 1 -name '*.app' -print -quit)"
+          mkdir -p build/ipa/Payload
+          cp -R "$app_path" build/ipa/Payload/
+          (cd build/ipa && zip -qry ../Musiqapp-unsigned.ipa Payload)
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: musiqapp-ios-unsigned-ipa
+          path: build/Musiqapp-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7
