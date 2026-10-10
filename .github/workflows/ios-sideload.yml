@@ -31,7 +31,7 @@ jobs:
       - name: Archive an unsigned iPhone app
         run: |
           workspace="$(find ios -maxdepth 1 -name '*.xcworkspace' -print -quit)"
-          scheme="$(xcodebuild -list -json -workspace "$workspace" | node -e 'let input=""; process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => process.stdout.write(JSON.parse(input).workspace.schemes[0]));')"
+          scheme="$(basename "$workspace" .xcworkspace)"
 
           xcodebuild \
             -workspace "$workspace" \
