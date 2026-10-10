@@ -14,6 +14,8 @@ export type Track = {
   artwork: string;
   provider?: string;
   providerId?: string;
+  mixId?: string;
+  mixOffset?: number;
   fileExtension?: string;
   streamUrl?: string;
   downloadUrl?: string | null;
@@ -23,6 +25,7 @@ export type Track = {
   hasPlainLyrics?: boolean;
   lyricsSource?: string;
   isFavorite?: boolean;
+  playCount?: number;
   licenseUrl?: string;
   shareUrl?: string;
   localUri?: string;

@@ -85,6 +85,8 @@ export const PlayerOverlay = ({
   const queueExpanded = queueView.trackId === renderedTrack.id && queueView.expanded;
   const lyrics = renderedTrack.lyrics ?? [];
   const hasLyrics = lyrics.some((line) => line.text.trim().length > 0);
+  const isLiveRadio = renderedTrack.provider === 'radio';
+  const canFavoriteTrack = renderedTrack.provider === 'local';
   const detailsExpanded = (lyricsExpanded && hasLyrics) || queueExpanded;
   const elapsedSeconds = Math.max(0, currentTime);
   const totalSeconds = Math.max(0, durationSeconds);
@@ -551,7 +553,7 @@ export const PlayerOverlay = ({
           ]}
         >
           <ReanimatedAnimated.Image
-            source={renderedTrack.artwork ? { uri: renderedTrack.artwork, headers: getMusicApiHeaders() } : undefined}
+            source={renderedTrack.artwork ? { uri: renderedTrack.artwork, headers: renderedTrack.provider === 'local' ? getMusicApiHeaders() : undefined } : undefined}
             resizeMode="cover"
             blurRadius={32}
             style={[
@@ -659,21 +661,32 @@ export const PlayerOverlay = ({
                 expandedProgressStyle,
               ]}
             >
-                <PlayerSlider
-                  value={totalSeconds > 0 ? elapsedSeconds / totalSeconds : 0}
-                  accessibilityLabel="Playback position"
-                  activeColor="rgba(255,255,255,0.88)"
-                  disabled={totalSeconds <= 0}
-                  onSlidingComplete={(value) => onSeek(value * totalSeconds)}
-                />
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 9 }}>
-                  <Text style={{ color: 'rgba(255,255,255,0.55)', fontSize: 14, fontWeight: '600' }}>
-                    {formatTime(elapsedSeconds)}
-                  </Text>
-                  <Text style={{ color: 'rgba(255,255,255,0.55)', fontSize: 14, fontWeight: '600' }}>
-                    -{formatTime(remainingSeconds)}
-                  </Text>
-                </View>
+                {isLiveRadio ? (
+                  <View style={{ minHeight: 55, alignItems: 'center', justifyContent: 'center' }}>
+                    <View style={{ minHeight: 32, paddingHorizontal: 14, borderRadius: 18, backgroundColor: 'rgba(250,82,101,0.14)', flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: '#FA5265' }} />
+                      <Text style={{ color: '#FA5265', fontSize: 12, fontWeight: '800', letterSpacing: 1.1 }}>LIVE STREAM</Text>
+                    </View>
+                  </View>
+                ) : (
+                  <>
+                    <PlayerSlider
+                      value={totalSeconds > 0 ? elapsedSeconds / totalSeconds : 0}
+                      accessibilityLabel="Playback position"
+                      activeColor="rgba(255,255,255,0.88)"
+                      disabled={totalSeconds <= 0}
+                      onSlidingComplete={(value) => onSeek(value * totalSeconds)}
+                    />
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 9 }}>
+                      <Text style={{ color: 'rgba(255,255,255,0.55)', fontSize: 14, fontWeight: '600' }}>
+                        {formatTime(elapsedSeconds)}
+                      </Text>
+                      <Text style={{ color: 'rgba(255,255,255,0.55)', fontSize: 14, fontWeight: '600' }}>
+                        -{formatTime(remainingSeconds)}
+                      </Text>
+                    </View>
+                  </>
+                )}
             </ReanimatedAnimated.View>
 
             <ReanimatedAnimated.View
@@ -833,7 +846,7 @@ export const PlayerOverlay = ({
               style={{ width: '100%', height: '100%' }}
             >
               <ReanimatedAnimated.Image
-                source={renderedTrack.artwork ? { uri: renderedTrack.artwork, headers: getMusicApiHeaders() } : undefined}
+                source={renderedTrack.artwork ? { uri: renderedTrack.artwork, headers: renderedTrack.provider === 'local' ? getMusicApiHeaders() : undefined } : undefined}
                 resizeMode="cover"
                 accessibilityLabel={renderedTrack.album + ' album artwork'}
                 style={{ width: '100%', height: '100%' }}
@@ -884,6 +897,7 @@ export const PlayerOverlay = ({
             <View style={{ position: 'absolute', right: 30, flexDirection: 'row' }}>
               <TouchableOpacity
                 onPress={onToggleFavorite}
+                disabled={!canFavoriteTrack}
                 hitSlop={8}
                 accessibilityRole="button"
                 accessibilityLabel={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
@@ -895,6 +909,7 @@ export const PlayerOverlay = ({
                   backgroundColor: 'rgba(255, 255, 255, 0.13)',
                   alignItems: 'center',
                   justifyContent: 'center',
+                  opacity: canFavoriteTrack ? 1 : 0.35,
                 }}
               >
                 <Ionicons name={isFavorite ? 'star' : 'star-outline'} size={24} color={isFavorite ? '#FA5265' : 'white'} />

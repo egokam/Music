@@ -4,6 +4,8 @@ import type { ImportProgress, TrackEditChanges } from '../services/MusicCatalogS
 
 type PlaybackActions = {
   tracks: Track[];
+  activeTrack: Track | null;
+  mostPlayedTracks: Track[];
   downloadedTracks: Track[];
   hasActiveTrack: boolean;
   favoriteTracks: Track[];
@@ -41,14 +43,18 @@ type PlaybackActions = {
   deletePlaylist: (playlistId: string) => Promise<void>;
   playNext: (track: Track) => void;
   playTrack: (track: Track, queue?: Track[]) => void;
+  togglePlayback: () => void;
   playAllSongs: (queue?: Track[]) => void;
   shuffleSongs: (queue?: Track[]) => void;
 };
 
 export const PlaybackContext = createContext<PlaybackActions | null>(null);
+export const RadioPlaybackStatusContext = createContext(false);
 
 export const usePlaybackActions = () => {
   const actions = useContext(PlaybackContext);
   if (!actions) throw new Error('Playback actions are unavailable outside PlaybackContext.');
   return actions;
 };
+
+export const useRadioPlaybackStatus = () => useContext(RadioPlaybackStatusContext);

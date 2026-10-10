@@ -132,7 +132,7 @@ export const PlayerQueuePanel = ({
           >
             {track.artwork ? (
               <Image
-                source={{ uri: track.artwork, headers: getMusicApiHeaders() }}
+                source={{ uri: track.artwork, headers: track.provider === 'local' ? getMusicApiHeaders() : undefined }}
                 resizeMode="cover"
                 style={{ width: 46, height: 46, borderRadius: 8, backgroundColor: '#303034' }}
               />

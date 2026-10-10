@@ -4,10 +4,12 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
+import { File, Paths } from 'expo-file-system';
 import * as SecureStore from 'expo-secure-store';
 import { CustomTabBar } from './src/components/navigation/CustomTabBar';
 import { PlayerOverlay } from './src/components/player/PlayerOverlay';
-import { PlaybackContext } from './src/contexts/PlaybackContext';
+import { PlaybackContext, RadioPlaybackStatusContext } from './src/contexts/PlaybackContext';
+import { AUDIO_MIXES, AudiusCatalogService, type AudiusMixId } from './src/services/AudiusCatalogService';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { LibraryScreen } from './src/screens/LibraryScreen';
 import { RadioScreen } from './src/screens/RadioScreen';
@@ -19,6 +21,27 @@ import type { PlaylistCoverSelection, PlaylistSummary, Track } from './src/types
 import './styles.css';
 
 const Tab = createBottomTabNavigator();
+const playbackCountsFile = new File(Paths.document, 'musiqapp-play-counts.json');
+
+type PlaybackCounts = Record<string, number>;
+
+const loadPlaybackCounts = async (): Promise<PlaybackCounts> => {
+  if (!playbackCountsFile.exists) return {};
+  try {
+    const savedCounts = JSON.parse(await playbackCountsFile.text()) as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(savedCounts).filter((entry): entry is [string, number] =>
+      typeof entry[1] === 'number' && Number.isFinite(entry[1]) && entry[1] > 0,
+    ));
+  } catch {
+    return {};
+  }
+};
+
+const savePlaybackCounts = (counts: PlaybackCounts) => {
+  if (playbackCountsFile.exists) playbackCountsFile.delete();
+  playbackCountsFile.create({ intermediates: true });
+  playbackCountsFile.write(JSON.stringify(counts));
+};
 
 const mergeOfflineTrack = (remoteTrack: Track, offlineTrack?: Track): Track => {
   if (!offlineTrack) return remoteTrack;
@@ -35,6 +58,7 @@ export default function App() {
   const player = useAudioPlayer(null, { updateInterval: 250 });
   const playerStatus = useAudioPlayerStatus(player);
   const [tracks, setTracks] = useState<Track[]>([]);
+  const [playCounts, setPlayCounts] = useState<PlaybackCounts>({});
   const [favoriteTracks, setFavoriteTracks] = useState<Track[]>([]);
   const [playlists, setPlaylists] = useState<PlaylistSummary[]>([]);
   const [downloadedTracks, setDownloadedTracks] = useState<Track[]>([]);
@@ -52,20 +76,41 @@ export default function App() {
   const tracksRef = useRef<Track[]>([]);
   const downloadsRef = useRef<Track[]>([]);
   const favoriteIdsRef = useRef<Set<string>>(new Set());
+  const playCountsRef = useRef<PlaybackCounts>({});
   const favoriteStateLoaded = useRef(false);
   const queueRef = useRef<Track[]>([]);
   const activeTrackRef = useRef<Track | null>(null);
+  const playerPlayingRef = useRef(false);
   const searchGeneration = useRef(0);
   const handledFinishedTrack = useRef<string | null>(null);
+  const loadingAudiusMixPages = useRef(new Set<string>());
 
   const updatePlaybackQueue = useCallback((nextQueue: Track[]) => {
     queueRef.current = nextQueue;
     setPlaybackQueue(nextQueue);
   }, []);
 
+  const incrementPlayCount = useCallback((trackId: string) => {
+    const nextCounts = {
+      ...playCountsRef.current,
+      [trackId]: (playCountsRef.current[trackId] ?? 0) + 1,
+    };
+    playCountsRef.current = nextCounts;
+    setPlayCounts(nextCounts);
+    try {
+      savePlaybackCounts(nextCounts);
+    } catch {
+      // Keep playback working if local play history cannot be saved.
+    }
+  }, []);
+
   useEffect(() => {
     tracksRef.current = tracks;
   }, [tracks]);
+
+  useEffect(() => {
+    playerPlayingRef.current = playerStatus.playing;
+  }, [playerStatus.playing]);
 
   useEffect(() => {
     downloadsRef.current = downloadedTracks;
@@ -207,8 +252,11 @@ export default function App() {
       OfflineMusicService.getDownloadedTracks(),
       PlaylistStorageService.getPlaylists(),
       SecureStore.getItemAsync('musiqapp_api_token'),
-    ]).then(([savedTracks, savedPlaylists, savedToken]) => {
+      loadPlaybackCounts(),
+    ]).then(([savedTracks, savedPlaylists, savedToken, savedPlayCounts]) => {
       if (!mounted) return;
+      playCountsRef.current = savedPlayCounts;
+      setPlayCounts(savedPlayCounts);
       downloadsRef.current = savedTracks;
       setDownloadedTracks(savedTracks);
       favoriteIdsRef.current = new Set(savedTracks.filter((track) => track.isFavorite).map((track) => track.id));
@@ -285,14 +333,27 @@ export default function App() {
     activeTrackRef.current = selectedTrack;
     setActiveTrack(selectedTrack);
     handledFinishedTrack.current = null;
+    const isRadioTrack = selectedTrack.provider === 'radio';
+    const musicApiHeaders = selectedTrack.provider === 'local' ? getMusicApiHeaders() : {};
     player.replace(
       selectedTrack.localUri
         ? selectedTrack.localUri
-        : { uri: audioUri, headers: getMusicApiHeaders(), name: selectedTrack.title },
+        : { uri: audioUri, headers: musicApiHeaders, name: selectedTrack.title },
     );
+    try {
+      player.setActiveForLockScreen(true, {
+        title: selectedTrack.title,
+        artist: selectedTrack.artist,
+        albumTitle: isRadioTrack ? 'Live Radio' : selectedTrack.album,
+        ...(selectedTrack.artwork ? { artworkUrl: selectedTrack.artwork } : {}),
+      });
+    } catch {
+      // Lock-screen metadata is optional; keep stream playback available if the OS rejects it.
+    }
     player.play();
+    if (!isRadioTrack) incrementPlayCount(selectedTrack.id);
 
-    if (!selectedTrack.lyrics?.length) {
+    if (!isRadioTrack && !selectedTrack.lyrics?.length) {
       void MusicCatalogService.getLyrics(selectedTrack)
         .then((trackWithLyrics) => {
           if (activeTrackRef.current?.id !== selectedTrack.id) return;
@@ -305,11 +366,37 @@ export default function App() {
         })
         .catch(() => undefined);
     }
-  }, [player, updatePlaybackQueue]);
+  }, [incrementPlayCount, player, updatePlaybackQueue]);
 
   const playTrack = useCallback((track: Track, queue = tracksRef.current) => {
     playSelectedTrack(track, queue);
   }, [playSelectedTrack]);
+
+  const loadMoreAudiusMixTracks = useCallback(async (mixId: string) => {
+    if (!AUDIO_MIXES.some((mix) => mix.id === mixId) || loadingAudiusMixPages.current.has(mixId)) return;
+    loadingAudiusMixPages.current.add(mixId);
+    try {
+      const currentQueue = queueRef.current;
+      const mixQueue = currentQueue.filter((track) => track.mixId === mixId);
+      const nextOffset = mixQueue.reduce((maximum, track) => Math.max(maximum, (track.mixOffset ?? -1) + 1), 0);
+      const moreTracks = await AudiusCatalogService.getMixTracks(mixId as AudiusMixId, nextOffset);
+      if (activeTrackRef.current?.mixId !== mixId) return;
+
+      const latestQueue = queueRef.current;
+      const knownIds = new Set(latestQueue.map((track) => track.id));
+      const additions = moreTracks.filter((track) => !knownIds.has(track.id));
+      if (additions.length > 0) updatePlaybackQueue([...latestQueue, ...additions]);
+    } catch {
+      // Keep the current mix playing if the catalog is temporarily unavailable.
+    } finally {
+      loadingAudiusMixPages.current.delete(mixId);
+    }
+  }, [updatePlaybackQueue]);
+
+  const togglePlayback = useCallback(() => {
+    if (playerPlayingRef.current) player.pause();
+    else player.play();
+  }, [player]);
 
   const playAllSongs = useCallback((queue = tracksRef.current) => {
     const currentQueue = queue;
@@ -335,6 +422,29 @@ export default function App() {
   }, [updatePlaybackQueue]);
 
   const advanceQueue = useCallback((trackFinished = false) => {
+    const active = activeTrackRef.current;
+    if (active?.provider === 'radio') {
+      const currentQueue = queueRef.current;
+      const currentIndex = currentQueue.findIndex((track) => track.id === active.id);
+      if (currentQueue.length > 0) {
+        playSelectedTrack(currentQueue[(currentIndex + 1 + currentQueue.length) % currentQueue.length], currentQueue);
+      }
+      return;
+    }
+
+    if (active?.provider === 'audius') {
+      const currentQueue = queueRef.current;
+      const currentIndex = currentQueue.findIndex((track) => track.id === active.id);
+      if (active.mixId && currentIndex >= currentQueue.length - 5) {
+        void loadMoreAudiusMixTracks(active.mixId);
+      }
+      if (currentQueue.length > 0) {
+        const nextIndex = (currentIndex + 1 + currentQueue.length) % currentQueue.length;
+        playSelectedTrack(currentQueue[nextIndex], currentQueue);
+      }
+      return;
+    }
+
     if (trackFinished && repeatMode === 'one' && activeTrackRef.current) {
       void player.seekTo(0);
       player.play();
@@ -370,7 +480,7 @@ export default function App() {
         playSelectedTrack(nextTrack, [...currentQueue, nextTrack]);
       }
     }
-  }, [autoplayEnabled, player, playSelectedTrack, repeatMode]);
+  }, [autoplayEnabled, loadMoreAudiusMixTracks, player, playSelectedTrack, repeatMode]);
 
   const skipNext = useCallback(() => advanceQueue(false), [advanceQueue]);
 
@@ -404,6 +514,16 @@ export default function App() {
   }, [playSelectedTrack]);
 
   const skipPrevious = useCallback(() => {
+    const activeTrack = activeTrackRef.current;
+    if (activeTrack?.provider === 'radio') {
+      const currentQueue = queueRef.current;
+      const currentIndex = currentQueue.findIndex((track) => track.id === activeTrack.id);
+      if (currentQueue.length > 0) {
+        playSelectedTrack(currentQueue[(currentIndex - 1 + currentQueue.length) % currentQueue.length], currentQueue);
+      }
+      return;
+    }
+
     if (playerStatus.currentTime > 3) {
       void player.seekTo(0);
       return;
@@ -672,8 +792,16 @@ export default function App() {
     return importedTrack;
   }, []);
 
+  const mostPlayedTracks = useMemo(() => tracks
+    .map((track) => ({ ...track, playCount: playCounts[track.id] ?? 0 }))
+    .filter((track) => track.playCount > 0)
+    .sort((first, second) => (second.playCount ?? 0) - (first.playCount ?? 0) || first.title.localeCompare(second.title))
+    .slice(0, 12), [playCounts, tracks]);
+
   const playbackActions = useMemo(() => ({
     tracks,
+    activeTrack,
+    mostPlayedTracks,
     downloadedTracks,
     hasActiveTrack: Boolean(activeTrack),
     favoriteTracks,
@@ -705,6 +833,7 @@ export default function App() {
     deletePlaylist,
     playNext,
     playTrack,
+    togglePlayback,
     playAllSongs,
     shuffleSongs,
   }), [
@@ -726,6 +855,7 @@ export default function App() {
     loadError,
     playAllSongs,
     playTrack,
+    togglePlayback,
     searchTracks,
     loadAllTracks,
     saveTrackLyrics,
@@ -733,6 +863,7 @@ export default function App() {
     connectToLibrary,
     disconnectFromLibrary,
     tracks,
+    mostPlayedTracks,
     activeTrack,
     playlists,
     loadFavoriteTracks,
@@ -746,18 +877,20 @@ export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <PlaybackContext.Provider value={playbackActions}>
-        <NavigationContainer>
-          <Tab.Navigator
-            tabBar={(props) => <CustomTabBar {...props} />}
-            screenOptions={{ headerShown: false }}
-            initialRouteName="Library"
-          >
-            <Tab.Screen name="Home" component={HomeScreen} />
-            <Tab.Screen name="Radio" component={RadioScreen} />
-            <Tab.Screen name="Library" component={LibraryScreen} />
-            <Tab.Screen name="Search" component={SearchScreen} />
-          </Tab.Navigator>
-        </NavigationContainer>
+        <RadioPlaybackStatusContext.Provider value={playerStatus.playing}>
+          <NavigationContainer>
+            <Tab.Navigator
+              tabBar={(props) => <CustomTabBar {...props} />}
+              screenOptions={{ headerShown: false }}
+              initialRouteName="Library"
+            >
+              <Tab.Screen name="Home" component={HomeScreen} />
+              <Tab.Screen name="Radio" component={RadioScreen} />
+              <Tab.Screen name="Library" component={LibraryScreen} />
+              <Tab.Screen name="Search" component={SearchScreen} />
+            </Tab.Navigator>
+          </NavigationContainer>
+        </RadioPlaybackStatusContext.Provider>
       </PlaybackContext.Provider>
       {activeTrack ? (
         <PlayerOverlay

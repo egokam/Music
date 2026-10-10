@@ -1,4 +1,3 @@
-import { useRef } from 'react';
 import { ActivityIndicator, Image, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { Track } from '../../types';
@@ -39,8 +38,6 @@ export const SongListItem = ({
   onAddToPlaylist?: () => void;
   isLast: boolean;
 }) => {
-  const moreAnchorRef = useRef<View>(null);
-
   return (
   <View
     style={{
@@ -196,9 +193,11 @@ export const SongListItem = ({
         </TouchableOpacity>
       )}
       {showMore ? (
-        <View ref={moreAnchorRef} collapsable={false}>
           <TouchableOpacity
-            onPress={() => moreAnchorRef.current?.measureInWindow((x, y, width, height) => onMore?.({ x, y, width, height }))}
+            onPress={(event) => {
+              const { pageX, pageY, locationX, locationY } = event.nativeEvent;
+              onMore?.({ x: pageX - locationX, y: pageY - locationY, width: 28, height: 40 });
+            }}
             accessibilityRole="button"
             accessibilityLabel={`More options for ${track.title}`}
             hitSlop={10}
@@ -206,7 +205,6 @@ export const SongListItem = ({
           >
             <Ionicons name="ellipsis-horizontal" size={23} color="white" />
           </TouchableOpacity>
-        </View>
       ) : null}
     </View>
   </View>

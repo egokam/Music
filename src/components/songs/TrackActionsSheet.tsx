@@ -146,6 +146,7 @@ export const TrackActionsSheet = ({
   const [cardScale] = useState(() => new Animated.Value(0.95));
   const [cardTranslateY] = useState(() => new Animated.Value(-7));
   const [backdropOpacity] = useState(() => new Animated.Value(0));
+  const [backdropDimOpacity] = useState(() => Animated.multiply(backdropOpacity, 0.32));
   const [pageOpacity] = useState(() => new Animated.Value(1));
   const dismissing = useRef(false);
   const actionCardWidth = Math.min(windowWidth - 32, 300);
@@ -161,6 +162,7 @@ export const TrackActionsSheet = ({
   const [animatedLeft] = useState(() => new Animated.Value(actionMenuLeft));
   const [animatedWidth] = useState(() => new Animated.Value(actionCardWidth));
   const [animatedHeight] = useState(() => new Animated.Value(actionMenuHeight));
+  const transitioningPage = useRef(false);
 
   useEffect(() => {
     if (!visible) return;
@@ -170,10 +172,10 @@ export const TrackActionsSheet = ({
     cardTranslateY.setValue(-7);
     backdropOpacity.setValue(0);
     Animated.parallel([
-      Animated.timing(cardOpacity, { toValue: 1, duration: 180, useNativeDriver: false }),
-      Animated.spring(cardScale, { toValue: 1, damping: 18, stiffness: 250, mass: 0.75, useNativeDriver: false }),
-      Animated.spring(cardTranslateY, { toValue: 0, damping: 18, stiffness: 250, mass: 0.75, useNativeDriver: false }),
-      Animated.timing(backdropOpacity, { toValue: 1, duration: 170, useNativeDriver: false }),
+      Animated.timing(cardOpacity, { toValue: 1, duration: 180, useNativeDriver: true }),
+      Animated.spring(cardScale, { toValue: 1, damping: 18, stiffness: 250, mass: 0.75, useNativeDriver: true }),
+      Animated.spring(cardTranslateY, { toValue: 0, damping: 18, stiffness: 250, mass: 0.75, useNativeDriver: true }),
+      Animated.timing(backdropOpacity, { toValue: 1, duration: 170, useNativeDriver: true }),
     ]).start();
   }, [backdropOpacity, cardOpacity, cardScale, cardTranslateY, visible]);
 
@@ -181,19 +183,23 @@ export const TrackActionsSheet = ({
     if (dismissing.current) return;
     dismissing.current = true;
     Animated.parallel([
-      Animated.timing(cardOpacity, { toValue: 0, duration: 150, useNativeDriver: false }),
-      Animated.spring(cardScale, { toValue: 0.97, damping: 20, stiffness: 260, mass: 0.75, useNativeDriver: false }),
-      Animated.timing(cardTranslateY, { toValue: -4, duration: 150, useNativeDriver: false }),
-      Animated.timing(backdropOpacity, { toValue: 0, duration: 150, useNativeDriver: false }),
-    ]).start(({ finished }) => {
-      if (!finished) return;
+      Animated.timing(cardOpacity, { toValue: 0, duration: 150, useNativeDriver: true }),
+      Animated.spring(cardScale, { toValue: 0.97, damping: 20, stiffness: 260, mass: 0.75, useNativeDriver: true }),
+      Animated.timing(cardTranslateY, { toValue: -4, duration: 150, useNativeDriver: true }),
+      Animated.timing(backdropOpacity, { toValue: 0, duration: 150, useNativeDriver: true }),
+    ]).start(() => {
       onClose();
     });
   };
 
   const transitionToPage = (nextPage: SheetPage) => {
-    Animated.timing(pageOpacity, { toValue: 0, duration: 80, useNativeDriver: false }).start(({ finished }) => {
-      if (!finished) return;
+    if (transitioningPage.current || dismissing.current) return;
+    transitioningPage.current = true;
+    Animated.timing(pageOpacity, { toValue: 0, duration: 80, useNativeDriver: true }).start(({ finished }) => {
+      if (!finished) {
+        transitioningPage.current = false;
+        return;
+      }
       setPage(nextPage);
       const isActions = nextPage === 'actions';
       const nextHeight = isActions ? actionMenuHeight : expandedMenuHeight;
@@ -205,8 +211,14 @@ export const TrackActionsSheet = ({
         Animated.spring(animatedLeft, { toValue: nextLeft, damping: 22, stiffness: 210, mass: 0.9, useNativeDriver: false }),
         Animated.spring(animatedWidth, { toValue: nextWidth, damping: 22, stiffness: 210, mass: 0.9, useNativeDriver: false }),
         Animated.spring(animatedHeight, { toValue: nextHeight, damping: 22, stiffness: 210, mass: 0.9, useNativeDriver: false }),
-      ]).start(() => {
-        Animated.timing(pageOpacity, { toValue: 1, duration: 130, useNativeDriver: false }).start();
+      ]).start(({ finished: layoutFinished }) => {
+        if (!layoutFinished) {
+          transitioningPage.current = false;
+          return;
+        }
+        Animated.timing(pageOpacity, { toValue: 1, duration: 130, useNativeDriver: true }).start(({ finished: fadeFinished }) => {
+          if (fadeFinished) transitioningPage.current = false;
+        });
       });
     });
   };
@@ -285,7 +297,7 @@ export const TrackActionsSheet = ({
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <Animated.View
           pointerEvents="none"
-          style={[StyleSheet.absoluteFill, { backgroundColor: '#000000', opacity: Animated.multiply(backdropOpacity, 0.32) }]}
+          style={[StyleSheet.absoluteFill, { backgroundColor: '#000000', opacity: backdropDimOpacity }]}
         />
         <Pressable
           accessibilityLabel="Close track options"
@@ -300,20 +312,27 @@ export const TrackActionsSheet = ({
             width: animatedWidth,
             height: animatedHeight,
             maxHeight: windowHeight * 0.82,
-            borderRadius: 22,
-            overflow: 'hidden',
-            backgroundColor: 'rgba(31,31,34,0.98)',
-            borderWidth: 1,
-            borderColor: 'rgba(255,255,255,0.13)',
-            shadowColor: '#000000',
-            shadowOpacity: 0.4,
-            shadowRadius: 24,
-            shadowOffset: { width: 0, height: 12 },
-            elevation: 28,
-            opacity: cardOpacity,
-            transform: [{ scale: cardScale }, { translateY: cardTranslateY }],
           }}
         >
+          <Animated.View
+            style={{
+              flex: 1,
+              width: '100%',
+              height: '100%',
+              borderRadius: 22,
+              overflow: 'hidden',
+              backgroundColor: 'rgba(31,31,34,0.98)',
+              borderWidth: 1,
+              borderColor: 'rgba(255,255,255,0.13)',
+              shadowColor: '#000000',
+              shadowOpacity: 0.4,
+              shadowRadius: 24,
+              shadowOffset: { width: 0, height: 12 },
+              elevation: 28,
+              opacity: cardOpacity,
+              transform: [{ scale: cardScale }, { translateY: cardTranslateY }],
+            }}
+          >
           <View style={{ minHeight: 56, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center' }}>
             {page === 'actions' ? (
               track.artwork ? (
@@ -475,6 +494,7 @@ export const TrackActionsSheet = ({
                 </View>
               </ScrollView>
             ) : null}
+          </Animated.View>
           </Animated.View>
         </Animated.View>
       </KeyboardAvoidingView>

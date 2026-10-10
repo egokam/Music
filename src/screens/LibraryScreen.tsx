@@ -1,13 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, ScrollView, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { createNativeStackNavigator, type NativeStackScreenProps } from '@react-navigation/native-stack';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { WebView } from 'react-native-webview';
 import { LibraryList } from '../components/library/LibraryList';
 import { TopBar } from '../components/library/TopBar';
 import { usePlaybackActions } from '../contexts/PlaybackContext';
 import type { PlaylistSummary, Track } from '../types';
 import type { TrackEditChanges } from '../services/MusicCatalogService';
+import { getMusicApiHeaders } from '../services/MusicCatalogService';
 import { DownloaderScreen } from './DownloaderScreen';
 import { LrcCheckerScreen } from './LrcCheckerScreen';
 import { PlaylistsScreen } from './PlaylistsScreen';
@@ -17,6 +20,8 @@ import { ArtistsScreen } from './ArtistsScreen';
 
 type LibraryStackParamList = {
   LibraryHome: undefined;
+  DeveloperProfile: undefined;
+  ProfileWeb: { title: string; url: string };
   Songs: undefined;
   Albums: undefined;
   Artists: undefined;
@@ -35,28 +40,194 @@ const Stack = createNativeStackNavigator<LibraryStackParamList>();
 
 const LibraryHomeScreen = ({
   navigation,
-}: NativeStackScreenProps<LibraryStackParamList, 'LibraryHome'>) => (
-  <SafeAreaView className="flex-1 bg-black" edges={['top']}>
-    <ScrollView className="flex-1" contentContainerStyle={{ paddingBottom: 190 }}>
-      <TopBar />
-      <LibraryList
-        onSelectCategory={(title) => {
-          if (title === 'Songs') navigation.navigate('Songs');
-          if (title === 'Albums') navigation.navigate('Albums');
-          if (title === 'Artists') navigation.navigate('Artists');
-          if (title === 'Downloaded') navigation.navigate('Downloaded');
-          if (title === 'Favorites') navigation.navigate('Favorites');
-          if (title === 'Playlists') navigation.navigate('Playlists');
-          if (title === 'Downloader') navigation.navigate('Downloader');
-          if (title === 'LRC Checker') navigation.navigate('LrcChecker');
-        }}
-      />
-      <View className="px-5 mt-6 mb-4">
-        <Text className="text-white text-[22px] font-bold">Recently Added</Text>
+}: NativeStackScreenProps<LibraryStackParamList, 'LibraryHome'>) => {
+  const { mostPlayedTracks, playTrack, isLoadingTracks, apiInitializing } = usePlaybackActions();
+
+  return (
+    <SafeAreaView className="flex-1 bg-black" edges={['top']}>
+      <ScrollView className="flex-1" contentContainerStyle={{ paddingBottom: 190 }}>
+        <TopBar onProfilePress={() => navigation.navigate('DeveloperProfile')} />
+        <LibraryList
+          onSelectCategory={(title) => {
+            if (title === 'Songs') navigation.navigate('Songs');
+            if (title === 'Albums') navigation.navigate('Albums');
+            if (title === 'Artists') navigation.navigate('Artists');
+            if (title === 'Downloaded') navigation.navigate('Downloaded');
+            if (title === 'Favorites') navigation.navigate('Favorites');
+            if (title === 'Playlists') navigation.navigate('Playlists');
+            if (title === 'Downloader') navigation.navigate('Downloader');
+            if (title === 'LRC Checker') navigation.navigate('LrcChecker');
+          }}
+        />
+        <View style={{ marginTop: 26, marginBottom: 12 }}>
+          <Text style={{ color: 'white', fontSize: 22, fontWeight: '700', marginHorizontal: 20, marginBottom: 14 }}>
+            Most Played
+          </Text>
+          {mostPlayedTracks.length > 0 ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 20, gap: 14 }}>
+              {mostPlayedTracks.map((track) => (
+                <TouchableOpacity
+                  key={track.id}
+                  onPress={() => playTrack(track, mostPlayedTracks)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Play ${track.title} by ${track.artist}, played ${track.playCount} times`}
+                  style={{ width: 148 }}
+                >
+                  <View style={{ width: 148, height: 148, borderRadius: 15, overflow: 'hidden', backgroundColor: '#202024' }}>
+                    {track.artwork ? (
+                      <Image
+                        source={{ uri: track.artwork, headers: getMusicApiHeaders() }}
+                        resizeMode="cover"
+                        style={{ width: '100%', height: '100%' }}
+                      />
+                    ) : (
+                      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+                        <Text style={{ color: '#FA243C', fontSize: 30 }}>♫</Text>
+                      </View>
+                    )}
+                  </View>
+                  <Text numberOfLines={1} style={{ color: 'white', fontSize: 15, fontWeight: '600', marginTop: 9 }}>
+                    {track.title}
+                  </Text>
+                  <Text numberOfLines={1} style={{ color: '#8E8E93', fontSize: 13, fontWeight: '500', marginTop: 3 }}>
+                    {track.artist}
+                  </Text>
+                  <Text style={{ color: '#8E8E93', fontSize: 12, marginTop: 4 }}>
+                    {track.playCount} plays
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          ) : (
+            <Text style={{ color: '#8E8E93', fontSize: 14, marginHorizontal: 20 }}>
+              {isLoadingTracks || apiInitializing ? 'Loading your library…' : 'Your most played tracks will appear here as you listen.'}
+            </Text>
+          )}
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+};
+
+const DeveloperProfileScreen = ({
+  navigation,
+}: NativeStackScreenProps<LibraryStackParamList, 'DeveloperProfile'>) => {
+  const links = [
+    { title: 'GitHub', subtitle: 'github.com/egokam', icon: 'logo-github' as const, url: 'https://github.com/egokam' },
+    { title: 'Instagram', subtitle: '@kotmanii', icon: 'logo-instagram' as const, url: 'https://instagram.com/kotmanii' },
+    { title: 'Portfolio', subtitle: 'portfolio.egokam.site', icon: 'globe-outline' as const, url: 'https://portfolio.egokam.site' },
+  ];
+
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#000000' }} edges={['top', 'bottom']}>
+      <View style={{ height: 56, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center' }}>
+        <TouchableOpacity
+          onPress={navigation.goBack}
+          accessibilityRole="button"
+          accessibilityLabel="Back to Library"
+          style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: '#1C1C1E', alignItems: 'center', justifyContent: 'center' }}
+        >
+          <Ionicons name="chevron-back" size={23} color="white" />
+        </TouchableOpacity>
+        <Text style={{ flex: 1, color: 'white', fontSize: 17, fontWeight: '700', textAlign: 'center', marginRight: 42 }}>
+          Developer
+        </Text>
       </View>
-    </ScrollView>
-  </SafeAreaView>
-);
+
+      <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 26 }} showsVerticalScrollIndicator={false}>
+        <View style={{ alignItems: 'center', marginTop: 30, marginBottom: 34 }}>
+          <View style={{ width: 104, height: 104, borderRadius: 52, backgroundColor: '#2A171C', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#4A222A' }}>
+            <Ionicons name="person" size={52} color="#FA5265" />
+          </View>
+          <Text style={{ color: 'white', fontSize: 34, fontWeight: '800', marginTop: 18 }}>Kamal</Text>
+          <Text style={{ color: '#A1A1A6', fontSize: 16, marginTop: 5 }}>Developer</Text>
+        </View>
+
+        <Text style={{ color: '#8E8E93', fontSize: 12, fontWeight: '700', letterSpacing: 1.5, marginBottom: 12 }}>
+          FIND ME ONLINE
+        </Text>
+        {links.map((link) => (
+          <TouchableOpacity
+            key={link.title}
+            onPress={() => navigation.navigate('ProfileWeb', { title: link.title, url: link.url })}
+            accessibilityRole="link"
+            accessibilityLabel={`Open Kamal’s ${link.title} profile`}
+            activeOpacity={0.78}
+            style={{ minHeight: 76, borderRadius: 18, backgroundColor: '#1C1C1E', paddingHorizontal: 16, marginBottom: 11, flexDirection: 'row', alignItems: 'center' }}
+          >
+            <View style={{ width: 42, height: 42, borderRadius: 15, backgroundColor: '#2B2B2F', alignItems: 'center', justifyContent: 'center' }}>
+              <Ionicons name={link.icon} size={21} color={link.title === 'Portfolio' ? '#FA5265' : 'white'} />
+            </View>
+            <View style={{ flex: 1, marginLeft: 13 }}>
+              <Text style={{ color: 'white', fontSize: 16, fontWeight: '600' }}>{link.title}</Text>
+              <Text style={{ color: '#8E8E93', fontSize: 13, marginTop: 3 }}>{link.subtitle}</Text>
+            </View>
+            <Ionicons name="open-outline" size={18} color="#8E8E93" />
+          </TouchableOpacity>
+        ))}
+
+        <Text style={{ color: '#65656B', fontSize: 12, textAlign: 'center', marginTop: 34 }}>
+  {'© 2026 Egokam. All rights reserved.\nEnjoy, dont try to make it commercial, contact admin for support.'}
+</Text>
+      </ScrollView>
+    </SafeAreaView>
+  );
+};
+
+const ProfileWebScreen = ({
+  navigation,
+  route,
+}: NativeStackScreenProps<LibraryStackParamList, 'ProfileWeb'>) => {
+  const webViewRef = useRef<WebView>(null);
+  const [canGoBack, setCanGoBack] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  const goBack = () => {
+    if (canGoBack) {
+      webViewRef.current?.goBack();
+    } else {
+      navigation.goBack();
+    }
+  };
+
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#000000' }} edges={['top', 'bottom']}>
+      <View style={{ height: 56, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center' }}>
+        <TouchableOpacity
+          onPress={goBack}
+          accessibilityRole="button"
+          accessibilityLabel={canGoBack ? 'Back in page' : 'Back to developer profile'}
+          style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: '#1C1C1E', alignItems: 'center', justifyContent: 'center' }}
+        >
+          <Ionicons name="chevron-back" size={23} color="white" />
+        </TouchableOpacity>
+        <Text numberOfLines={1} style={{ flex: 1, color: 'white', fontSize: 16, fontWeight: '700', textAlign: 'center', marginHorizontal: 12 }}>
+          {route.params.title}
+        </Text>
+        <View style={{ width: 42 }} />
+      </View>
+
+      <View style={{ flex: 1, overflow: 'hidden', backgroundColor: '#000000' }}>
+        <WebView
+          ref={webViewRef}
+          source={{ uri: route.params.url }}
+          style={{ flex: 1, backgroundColor: '#000000' }}
+          javaScriptEnabled
+          domStorageEnabled
+          allowsBackForwardNavigationGestures
+          onLoadStart={() => setLoading(true)}
+          onLoadEnd={() => setLoading(false)}
+          onNavigationStateChange={(state) => setCanGoBack(state.canGoBack)}
+        />
+        {loading ? (
+          <View pointerEvents="none" style={{ ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center', backgroundColor: '#000000' }}>
+            <ActivityIndicator size="small" color="#FA5265" />
+          </View>
+        ) : null}
+      </View>
+    </SafeAreaView>
+  );
+};
 
 const SongCatalogRoute = ({
   navigation,
@@ -577,6 +748,8 @@ export const LibraryScreen = () => (
     }}
   >
     <Stack.Screen name="LibraryHome" component={LibraryHomeScreen} />
+    <Stack.Screen name="DeveloperProfile" component={DeveloperProfileScreen} />
+    <Stack.Screen name="ProfileWeb" component={ProfileWebScreen} />
     <Stack.Screen name="Songs" component={SongsRoute} />
     <Stack.Screen name="Albums" component={AlbumsRoute} />
     <Stack.Screen name="Artists" component={ArtistsRoute} />
