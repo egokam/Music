@@ -81,6 +81,7 @@ export default function App() {
   const queueRef = useRef<Track[]>([]);
   const activeTrackRef = useRef<Track | null>(null);
   const playerPlayingRef = useRef(false);
+  const playerCurrentTimeRef = useRef(0);
   const searchGeneration = useRef(0);
   const handledFinishedTrack = useRef<string | null>(null);
   const loadingAudiusMixPages = useRef(new Set<string>());
@@ -111,6 +112,10 @@ export default function App() {
   useEffect(() => {
     playerPlayingRef.current = playerStatus.playing;
   }, [playerStatus.playing]);
+
+  useEffect(() => {
+    playerCurrentTimeRef.current = playerStatus.currentTime;
+  }, [playerStatus.currentTime]);
 
   useEffect(() => {
     downloadsRef.current = downloadedTracks;
@@ -398,6 +403,18 @@ export default function App() {
     else player.play();
   }, [player]);
 
+  const openPlayer = useCallback(() => {
+    setPlayerVisible(true);
+  }, []);
+
+  const closePlayer = useCallback(() => {
+    setPlayerVisible(false);
+  }, []);
+
+  const toggleQueueAutoplay = useCallback(() => {
+    setAutoplayEnabled((enabled) => !enabled);
+  }, []);
+
   const playAllSongs = useCallback((queue = tracksRef.current) => {
     const currentQueue = queue;
     if (currentQueue.length > 0) playSelectedTrack(currentQueue[0], currentQueue);
@@ -524,7 +541,7 @@ export default function App() {
       return;
     }
 
-    if (playerStatus.currentTime > 3) {
+    if (playerCurrentTimeRef.current > 3) {
       void player.seekTo(0);
       return;
     }
@@ -534,7 +551,7 @@ export default function App() {
       const previousIndex = (currentIndex - 1 + currentQueue.length) % currentQueue.length;
       playSelectedTrack(currentQueue[previousIndex], currentQueue);
     }
-  }, [playSelectedTrack, player, playerStatus.currentTime]);
+  }, [playSelectedTrack, player]);
 
   const seekTo = useCallback((seconds: number) => {
     void player.seekTo(Math.max(0, seconds));
@@ -617,6 +634,14 @@ export default function App() {
       throw error;
     }
   }, [updateTrackEverywhere]);
+
+  const toggleActiveTrackFavorite = useCallback(() => {
+    const track = activeTrackRef.current;
+    if (!track) return;
+    void toggleFavorite(track).catch((error) => {
+      Alert.alert('Could not update favorite', error instanceof Error ? error.message : 'Try again.');
+    });
+  }, [toggleFavorite]);
 
   const updateTrack = useCallback(async (track: Track, changes: TrackEditChanges) => {
     const updated = await MusicCatalogService.updateTrack(track, changes);
@@ -905,20 +930,18 @@ export default function App() {
           shuffleEnabled={shuffleEnabled}
           repeatMode={repeatMode}
           autoplayEnabled={autoplayEnabled}
-          onOpen={() => setPlayerVisible(true)}
-          onClose={() => setPlayerVisible(false)}
-          onTogglePlayback={() => playerStatus.playing ? player.pause() : player.play()}
+          onOpen={openPlayer}
+          onClose={closePlayer}
+          onTogglePlayback={togglePlayback}
           onSkipPrevious={skipPrevious}
           onSkipNext={skipNext}
           onSeek={seekTo}
           onVolumeChange={setPlayerVolume}
-          onToggleFavorite={() => void toggleFavorite(activeTrack).catch((error) => {
-            Alert.alert('Could not update favorite', error instanceof Error ? error.message : 'Try again.');
-          })}
+          onToggleFavorite={toggleActiveTrackFavorite}
           onPlayQueueTrack={playQueueTrack}
           onToggleShuffle={toggleQueueShuffle}
           onToggleRepeat={toggleRepeatMode}
-          onToggleAutoplay={() => setAutoplayEnabled((enabled) => !enabled)}
+          onToggleAutoplay={toggleQueueAutoplay}
           onClearQueue={clearUpcomingQueue}
         />
       ) : null}

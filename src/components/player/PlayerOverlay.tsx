@@ -2,7 +2,7 @@
 /* eslint-disable react-hooks/immutability, react-hooks/refs */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BackHandler, Text, TouchableOpacity, View, useWindowDimensions, type GestureResponderEvent } from 'react-native';
+import { BackHandler, Pressable, Text, TouchableOpacity, View, useWindowDimensions, type GestureResponderEvent } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { scheduleOnRN } from 'react-native-worklets';
@@ -14,7 +14,7 @@ import { PlayerQueuePanel } from './PlayerQueuePanel';
 import { PlayerSlider } from './PlayerSlider';
 import type { Track } from '../../types';
 
-export const PlayerOverlay = ({
+const PlayerOverlayView = ({
   visible,
   track,
   isFavorite,
@@ -615,7 +615,7 @@ export const PlayerOverlay = ({
                 lyricsPanelStyle,
               ]}
             >
-              {hasLyrics ? (
+              {visible && lyricsExpanded && hasLyrics ? (
               <ReanimatedAnimated.View
                 pointerEvents="auto"
                 style={{ flex: 1 }}
@@ -640,19 +640,21 @@ export const PlayerOverlay = ({
                 queuePanelStyle,
               ]}
             >
-              <PlayerQueuePanel
-                tracks={upcomingTracks}
-                height={lyricsViewportHeight}
-                scrollGesture={detailsScrollGesture}
-                shuffleEnabled={shuffleEnabled}
-                repeatMode={repeatMode}
-                autoplayEnabled={autoplayEnabled}
-                onPlayTrack={onPlayQueueTrack}
-                onToggleShuffle={onToggleShuffle}
-                onToggleRepeat={onToggleRepeat}
-                onToggleAutoplay={onToggleAutoplay}
-                onClearQueue={onClearQueue}
-              />
+              {visible && queueExpanded ? (
+                <PlayerQueuePanel
+                  tracks={upcomingTracks}
+                  height={lyricsViewportHeight}
+                  scrollGesture={detailsScrollGesture}
+                  shuffleEnabled={shuffleEnabled}
+                  repeatMode={repeatMode}
+                  autoplayEnabled={autoplayEnabled}
+                  onPlayTrack={onPlayQueueTrack}
+                  onToggleShuffle={onToggleShuffle}
+                  onToggleRepeat={onToggleRepeat}
+                  onToggleAutoplay={onToggleAutoplay}
+                  onClearQueue={onClearQueue}
+                />
+              ) : null}
             </ReanimatedAnimated.View>
 
             <ReanimatedAnimated.View
@@ -932,17 +934,27 @@ export const PlayerOverlay = ({
               playStyle,
             ]}
           >
-            <TouchableOpacity
+            <Pressable
               onPress={onTogglePlayback}
               accessibilityRole="button"
               accessibilityLabel={isPlaying ? 'Pause' : 'Play'}
               hitSlop={4}
-              style={{ width: '100%', height: 52, alignItems: 'center', justifyContent: 'center' }}
+              style={({ pressed }) => [
+                { width: '100%', height: 52, alignItems: 'center', justifyContent: 'center' },
+                pressed ? {
+                  transform: [{ scale: 0.96 }],
+                  shadowColor: '#FFFFFF',
+                  shadowOpacity: 0.18,
+                  shadowRadius: 8,
+                  shadowOffset: { width: 0, height: 0 },
+                  elevation: 5,
+                } : null,
+              ]}
             >
               <ReanimatedAnimated.View style={playIconStyle}>
                 <Ionicons name={isPlaying ? 'pause' : 'play'} size={52} color="white" />
               </ReanimatedAnimated.View>
-            </TouchableOpacity>
+            </Pressable>
           </ReanimatedAnimated.View>
 
           <ReanimatedAnimated.View
@@ -960,17 +972,27 @@ export const PlayerOverlay = ({
               nextStyle,
             ]}
           >
-            <TouchableOpacity
+            <Pressable
               onPress={onSkipNext}
               accessibilityRole="button"
               accessibilityLabel="Next track"
               hitSlop={4}
-              style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
+              style={({ pressed }) => [
+                { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+                pressed ? {
+                  transform: [{ scale: 0.96 }],
+                  shadowColor: '#FFFFFF',
+                  shadowOpacity: 0.18,
+                  shadowRadius: 8,
+                  shadowOffset: { width: 0, height: 0 },
+                  elevation: 5,
+                } : null,
+              ]}
             >
               <ReanimatedAnimated.View style={nextIconStyle}>
                 <Ionicons name="play-skip-forward" size={44} color="white" />
               </ReanimatedAnimated.View>
-            </TouchableOpacity>
+            </Pressable>
           </ReanimatedAnimated.View>
 
           {visible && ((lyricsExpanded && hasLyrics) || queueExpanded) ? (
@@ -996,3 +1018,41 @@ export const PlayerOverlay = ({
     </ReanimatedAnimated.View>
   );
 };
+
+type PlayerOverlayProps = React.ComponentProps<typeof PlayerOverlayView>;
+
+const playerOverlayPropsAreEqual = (previous: PlayerOverlayProps, next: PlayerOverlayProps) => {
+  if (
+    previous.visible !== next.visible ||
+    previous.track !== next.track ||
+    previous.isFavorite !== next.isFavorite ||
+    previous.isPlaying !== next.isPlaying ||
+    previous.onOpen !== next.onOpen ||
+    previous.onClose !== next.onClose ||
+    previous.onTogglePlayback !== next.onTogglePlayback ||
+    previous.onSkipPrevious !== next.onSkipPrevious ||
+    previous.onSkipNext !== next.onSkipNext ||
+    previous.onSeek !== next.onSeek ||
+    previous.onVolumeChange !== next.onVolumeChange ||
+    previous.onToggleFavorite !== next.onToggleFavorite ||
+    previous.onPlayQueueTrack !== next.onPlayQueueTrack ||
+    previous.onToggleShuffle !== next.onToggleShuffle ||
+    previous.onToggleRepeat !== next.onToggleRepeat ||
+    previous.onToggleAutoplay !== next.onToggleAutoplay ||
+    previous.onClearQueue !== next.onClearQueue
+  ) return false;
+
+  if (!next.visible) return true;
+
+  return (
+    previous.currentTime === next.currentTime &&
+    previous.durationSeconds === next.durationSeconds &&
+    previous.volume === next.volume &&
+    previous.queue === next.queue &&
+    previous.shuffleEnabled === next.shuffleEnabled &&
+    previous.repeatMode === next.repeatMode &&
+    previous.autoplayEnabled === next.autoplayEnabled
+  );
+};
+
+export const PlayerOverlay = React.memo(PlayerOverlayView, playerOverlayPropsAreEqual);
