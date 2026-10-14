@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Musiqapp",
+    "name": "Music",
     "slug": "musiqapp",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -43,7 +43,7 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow Musiqapp to choose an image for your playlist cover.",
+          "photosPermission": "Allow Music to choose an image for your playlist cover.",
           "cameraPermission": false,
           "microphonePermission": false
         }
