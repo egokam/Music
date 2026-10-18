@@ -54,6 +54,11 @@ const mergeOfflineTrack = (remoteTrack: Track, offlineTrack?: Track): Track => {
   };
 };
 
+const isMusicApiAuthenticationError = (error: unknown) => {
+  const message = error instanceof Error ? error.message.toLowerCase() : '';
+  return message.includes('valid musiqapp api token') || message.includes('music server returned 401');
+};
+
 export default function App() {
   const player = useAudioPlayer(null, { updateInterval: 250 });
   const playerStatus = useAudioPlayerStatus(player);
@@ -153,7 +158,15 @@ export default function App() {
       setTracks(merged);
     } catch (error) {
       if (generation === searchGeneration.current) {
-        setLoadError(error instanceof Error ? error.message : 'Could not reach your music server.');
+        if (isMusicApiAuthenticationError(error)) {
+          setMusicApiToken('');
+          setApiConnected(false);
+          setTracks(downloadsRef.current);
+          setLoadError(null);
+          void SecureStore.deleteItemAsync('musiqapp_api_token').catch(() => undefined);
+        } else {
+          setLoadError(error instanceof Error ? error.message : 'Could not reach your music server.');
+        }
       }
     } finally {
       if (generation === searchGeneration.current) setIsLoadingTracks(false);
@@ -351,6 +364,10 @@ export default function App() {
         artist: selectedTrack.artist,
         albumTitle: isRadioTrack ? 'Live Radio' : selectedTrack.album,
         ...(selectedTrack.artwork ? { artworkUrl: selectedTrack.artwork } : {}),
+      }, {
+        // replace() has not loaded remote media yet, so Expo may report an
+        // indefinite duration and infer "live" for ordinary songs.
+        isLiveStream: isRadioTrack,
       });
     } catch {
       // Lock-screen metadata is optional; keep stream playback available if the OS rejects it.

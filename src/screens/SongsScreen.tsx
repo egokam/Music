@@ -107,6 +107,9 @@ export const SongsScreen = ({
   emptyMessage?: string;
 }) => {
   const listRef = useRef<Animated.SectionList<Track, SongSection>>(null);
+  const pendingLetterSection = useRef<number | null>(null);
+  const letterScrollRetries = useRef(0);
+  const letterScrollRetryTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollY = useMemo(() => new Animated.Value(0), []);
   const insets = useSafeAreaInsets();
   const topInsetCompensation = Math.max(0, insets.top - 24);
@@ -114,6 +117,7 @@ export const SongsScreen = ({
   const [ascending, setAscending] = useState(true);
   const [sortMode, setSortMode] = useState<SongSortMode>('name');
   const [pairingCode, setPairingCode] = useState('');
+  const [showPairingForm, setShowPairingForm] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [selectedTrack, setSelectedTrack] = useState<{ track: Track; anchor: SongMenuAnchor } | null>(null);
@@ -125,6 +129,7 @@ export const SongsScreen = ({
 
   useEffect(() => () => {
     if (freedMessageTimeout.current) clearTimeout(freedMessageTimeout.current);
+    if (letterScrollRetryTimeout.current) clearTimeout(letterScrollRetryTimeout.current);
   }, []);
 
   useEffect(() => {
@@ -188,6 +193,7 @@ export const SongsScreen = ({
   const addedPlaylistIds = useMemo(() => new Set(addedPlaylistTrackIds), [addedPlaylistTrackIds]);
   const addingPlaylistIds = useMemo(() => new Set(addingPlaylistTrackIds), [addingPlaylistTrackIds]);
   const allDownloadsSelected = tracks.length > 0 && selectedDownloadIds.size === tracks.length;
+  const canReplacePairingCode = Boolean(loadError && /valid.*musiqapp.*api.*token|api token.*required|\b401\b/i.test(loadError));
 
   const toggleSelectAllDownloads = () => {
     if (allDownloadsSelected) {
@@ -232,6 +238,8 @@ export const SongsScreen = ({
     setConnectionError(null);
     try {
       await onConnect(pairingCode);
+      setPairingCode('');
+      setShowPairingForm(false);
     } catch (error) {
       setConnectionError(error instanceof Error ? error.message : 'Could not connect to your VPS library.');
     } finally {
@@ -248,7 +256,39 @@ export const SongsScreen = ({
     );
     const sectionIndex = exactSection >= 0 ? exactSection : nextSection >= 0 ? nextSection : sections.length - 1;
 
+    pendingLetterSection.current = sectionIndex;
+    letterScrollRetries.current = 0;
+    if (letterScrollRetryTimeout.current) clearTimeout(letterScrollRetryTimeout.current);
     listRef.current?.scrollToLocation({ sectionIndex, itemIndex: 0, animated: true, viewPosition: 0 });
+  };
+
+  const recoverLetterScroll = ({ index, averageItemLength }: {
+    index: number;
+    highestMeasuredFrameIndex: number;
+    averageItemLength: number;
+  }) => {
+    const list = listRef.current;
+    const sectionIndex = pendingLetterSection.current;
+    if (!list || sectionIndex === null) return;
+
+    // First move near the unmeasured row, then retry once it has entered the render window.
+    if (averageItemLength > 0) {
+      list.getScrollResponder()?.scrollTo({ y: Math.max(0, index * averageItemLength), animated: false });
+    }
+    if (letterScrollRetries.current >= 2) {
+      pendingLetterSection.current = null;
+      return;
+    }
+
+    letterScrollRetries.current += 1;
+    letterScrollRetryTimeout.current = setTimeout(() => {
+      listRef.current?.scrollToLocation({
+        sectionIndex,
+        itemIndex: 0,
+        animated: false,
+        viewPosition: 0,
+      });
+    }, 80);
   };
 
   const scrollHandler = useMemo(
@@ -274,7 +314,7 @@ export const SongsScreen = ({
     );
   }
 
-  if (!apiConnected && !offlineMode) {
+  if ((!apiConnected || showPairingForm) && !offlineMode) {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: '#000000' }} edges={['top']}>
         <SongsHeader onBack={onBack} onToggleSort={() => undefined} />
@@ -379,15 +419,31 @@ export const SongsScreen = ({
           }
           ListEmptyComponent={
             <View style={{ paddingHorizontal: 20, paddingTop: 22 }}>
-              <Text style={{ color: '#8E8E93', fontSize: 16 }}>
-                {isLoadingTracks ? 'Loading your music…' : loadError ?? emptyMessage}
-              </Text>
+              {isLoadingTracks ? (
+                <Text style={{ color: '#8E8E93', fontSize: 16 }}>Loading your music…</Text>
+              ) : canReplacePairingCode ? (
+                <TouchableOpacity
+                  onPress={() => {
+                    setConnectionError(null);
+                    setShowPairingForm(true);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Enter a new Musiqapp API pairing code"
+                >
+                  <Text style={{ color: '#8E8E93', fontSize: 16, textDecorationLine: 'underline' }}>
+                    {loadError} Tap to enter a new code.
+                  </Text>
+                </TouchableOpacity>
+              ) : (
+                <Text style={{ color: '#8E8E93', fontSize: 16 }}>{loadError ?? emptyMessage}</Text>
+              )}
             </View>
           }
           stickySectionHeadersEnabled={false}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
           onScroll={scrollHandler}
+          onScrollToIndexFailed={recoverLetterScroll}
           scrollEventThrottle={16}
           style={StyleSheet.absoluteFill}
           contentContainerStyle={{ paddingTop: 58, paddingBottom: selectionMode ? 276 : 190 }}

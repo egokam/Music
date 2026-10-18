@@ -101,6 +101,8 @@ export const LrcCheckerScreen = ({
   const [isStopping, setIsStopping] = useState(false);
   const [isLoadingCatalog, setIsLoadingCatalog] = useState(false);
   const [progress, setProgress] = useState({ completed: 0, total: 0 });
+  const [isApplyingAll, setIsApplyingAll] = useState(false);
+  const [applyAllProgress, setApplyAllProgress] = useState({ completed: 0, total: 0 });
   const [reviewTrack, setReviewTrack] = useState<Track | null>(null);
   const [isSavingReview, setIsSavingReview] = useState(false);
   const [customLrcTrack, setCustomLrcTrack] = useState<Track | null>(null);
@@ -112,6 +114,7 @@ export const LrcCheckerScreen = ({
   const scanGeneration = useRef(0);
   const stopRequested = useRef(false);
   const scanRunning = useRef(false);
+  const applyAllRunning = useRef(false);
 
   useEffect(() => () => {
     scanGeneration.current += 1;
@@ -127,6 +130,9 @@ export const LrcCheckerScreen = ({
   );
   const syncedCount = tracks.reduce((count, track) => count + (stateFor(track) === 'synced' ? 1 : 0), 0);
   const checkedCount = tracks.reduce((count, track) => count + (['synced', 'plain', 'missing', 'candidate'].includes(stateFor(track)) ? 1 : 0), 0);
+  const pendingLyricMatches = tracks.filter((track) =>
+    stateFor(track) === 'candidate' && isTimedLrc(results[track.id]?.syncedLyrics),
+  );
   const filteredTracks = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
     return tracks.filter((track) => `${track.title} ${track.artist} ${track.album}`.toLocaleLowerCase().includes(query));
@@ -158,7 +164,7 @@ export const LrcCheckerScreen = ({
   };
 
   const scanAll = async () => {
-    if (scanRunning.current) return;
+    if (scanRunning.current || applyAllRunning.current) return;
     if (!apiConnected) {
       onConnect();
       return;
@@ -219,6 +225,68 @@ export const LrcCheckerScreen = ({
   const stopScan = () => {
     stopRequested.current = true;
     setIsStopping(true);
+  };
+
+  const applyAllFoundLyrics = () => {
+    if (isBusy || applyAllRunning.current || pendingLyricMatches.length === 0) return;
+
+    Alert.alert(
+      'Apply & Approve All?',
+      `This will save the found synced lyrics for ${pendingLyricMatches.length} ${pendingLyricMatches.length === 1 ? 'track' : 'tracks'} to your library. Continue?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Apply All',
+          style: 'destructive',
+          onPress: () => { void saveAllFoundLyrics(); },
+        },
+      ],
+    );
+  };
+
+  const saveAllFoundLyrics = async () => {
+    if (applyAllRunning.current || pendingLyricMatches.length === 0) return;
+    applyAllRunning.current = true;
+    setIsApplyingAll(true);
+    setApplyAllProgress({ completed: 0, total: pendingLyricMatches.length });
+    let savedCount = 0;
+    let failedCount = 0;
+
+    for (let index = 0; index < pendingLyricMatches.length; index += 1) {
+      const track = pendingLyricMatches[index];
+      const lyrics = results[track.id]?.syncedLyrics;
+      if (!lyrics || !isTimedLrc(lyrics)) {
+        failedCount += 1;
+        setApplyAllProgress({ completed: index + 1, total: pendingLyricMatches.length });
+        continue;
+      }
+
+      try {
+        const saved = await onSaveTrackLyrics(track, lyrics);
+        setResults((current) => ({ ...current, [track.id]: saved }));
+        setStates((current) => ({ ...current, [track.id]: 'synced' }));
+        setErrors((current) => ({ ...current, [track.id]: '' }));
+        savedCount += 1;
+      } catch (error) {
+        failedCount += 1;
+        setErrors((current) => ({
+          ...current,
+          [track.id]: error instanceof Error ? error.message : 'Could not save this lyric match.',
+        }));
+      }
+      setApplyAllProgress({ completed: index + 1, total: pendingLyricMatches.length });
+    }
+
+    applyAllRunning.current = false;
+    setIsApplyingAll(false);
+    if (failedCount > 0) {
+      Alert.alert(
+        'Bulk apply finished',
+        `${savedCount} ${savedCount === 1 ? 'track was' : 'tracks were'} updated. ${failedCount} ${failedCount === 1 ? 'match could' : 'matches could'} not be saved; you can retry those individually.`,
+      );
+    } else {
+      Alert.alert('Lyrics applied', `Synced lyrics were saved for ${savedCount} ${savedCount === 1 ? 'track' : 'tracks'}.`);
+    }
   };
 
   const saveReview = async () => {
@@ -370,7 +438,7 @@ export const LrcCheckerScreen = ({
 
                 <TouchableOpacity
                   onPress={() => isScanning ? stopScan() : void scanAll()}
-                  disabled={isLoadingTracks}
+                  disabled={isLoadingTracks || isApplyingAll}
                   accessibilityRole="button"
                   accessibilityLabel={isScanning ? 'Stop library scan' : 'Scan all tracks for synced lyrics'}
                   style={{ height: 48, borderRadius: 24, backgroundColor: isScanning ? '#303033' : '#28282B', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 14, opacity: isLoadingTracks ? 0.6 : 1 }}
@@ -380,6 +448,32 @@ export const LrcCheckerScreen = ({
                     {isLoadingCatalog ? (isStopping ? 'Stopping…' : 'Loading your full library…') : isScanning ? (isStopping ? 'Finishing current track…' : 'Stop scan') : apiConnected ? 'Scan all tracks' : 'Connect library to scan'}
                   </Text>
                 </TouchableOpacity>
+
+                {pendingLyricMatches.length > 0 ? (
+                  <TouchableOpacity
+                    onPress={applyAllFoundLyrics}
+                    disabled={isBusy || isApplyingAll}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Apply and approve all ${pendingLyricMatches.length} found lyric matches`}
+                    style={{
+                      height: 48,
+                      borderRadius: 24,
+                      backgroundColor: '#FA243C',
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      marginTop: 10,
+                      opacity: isBusy ? 0.55 : 1,
+                    }}
+                  >
+                    {isApplyingAll ? <ActivityIndicator size="small" color="white" /> : <Ionicons name="checkmark-done" size={19} color="white" />}
+                    <Text style={{ color: 'white', fontSize: 14, fontWeight: '700', marginLeft: 8 }}>
+                      {isApplyingAll
+                        ? `Applying ${applyAllProgress.completed}/${applyAllProgress.total}…`
+                        : `Apply & Approve All (${pendingLyricMatches.length})`}
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
               </View>
 
               {!apiConnected ? (
@@ -418,7 +512,7 @@ export const LrcCheckerScreen = ({
                 track={item}
                 state={state}
                 errorMessage={errors[item.id]}
-                disabled={isScanning && state !== 'candidate'}
+                disabled={isApplyingAll || (isScanning && state !== 'candidate')}
                 onCheck={() => apiConnected ? void checkTrack(item, undefined, true).catch(() => undefined) : onConnect()}
                 onReview={() => result && setReviewTrack(result)}
                 onPaste={() => openCustomLrc(item)}

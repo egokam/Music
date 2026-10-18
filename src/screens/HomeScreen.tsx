@@ -452,7 +452,7 @@ export const HomeScreen = () => {
           <PressableCard
             style={{ width: '100%', marginTop: 34 }}
             onPress={() => void openDonationLink()}
-            accessibilityLabel="Support Musiqapp with a PayPal donation"
+            accessibilityLabel="Support Music app with a PayPal donation"
           >
             <LinearGradient
               colors={['#123879', '#0757C8', '#087BBE']}
@@ -464,7 +464,7 @@ export const HomeScreen = () => {
               <View style={{ position: 'absolute', width: 118, height: 118, borderRadius: 59, left: -48, bottom: 24, backgroundColor: 'rgba(2,24,69,0.18)' }} />
               <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 17 }}>
                 <FontAwesome name="paypal" size={18} color="white" />
-                <Text style={{ color: 'rgba(255,255,255,0.82)', fontSize: 12, fontWeight: '800', letterSpacing: 1.1, marginLeft: 8 }}>MUSIQAPP · SUPPORT</Text>
+                <Text style={{ color: 'rgba(255,255,255,0.82)', fontSize: 12, fontWeight: '800', letterSpacing: 1.1, marginLeft: 8 }}>MUSIC · SUPPORT</Text>
               </View>
               <Text style={{ color: 'white', fontSize: 27, lineHeight: 32, fontWeight: '800', letterSpacing: -0.65 }}>
                 Help keep the{ '\n' }music going.

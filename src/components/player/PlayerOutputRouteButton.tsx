@@ -2,6 +2,17 @@ import { Ionicons } from '@expo/vector-icons';
 import AVRoutePickerView from 'react-native-avroutepickerview';
 import { Alert, Platform, TouchableOpacity, UIManager, View } from 'react-native';
 
+const routeButtonStyle = {
+  width: 46,
+  height: 46,
+  alignItems: 'center' as const,
+  justifyContent: 'center' as const,
+  borderRadius: 23,
+  borderWidth: 1,
+  borderColor: 'rgba(250,82,101,0.34)',
+  backgroundColor: 'rgba(250,82,101,0.10)',
+};
+
 const hasIOSRoutePicker = () => {
   if (Platform.OS !== 'ios') return false;
   try {
@@ -16,12 +27,12 @@ export const PlayerOutputRouteButton = () => {
     return (
       <View
         accessibilityLabel="Choose an audio output"
-        style={{ width: 38, height: 38, alignItems: 'center', justifyContent: 'center' }}
+        style={routeButtonStyle}
       >
         <AVRoutePickerView
           color="rgba(255,255,255,0.68)"
           activeColor="#FA5265"
-          style={{ width: 38, height: 38 }}
+          style={{ width: 44, height: 44 }}
           accessibilityLabel="Choose an AirPlay audio output"
         />
       </View>
@@ -39,7 +50,7 @@ export const PlayerOutputRouteButton = () => {
       accessibilityRole="button"
       accessibilityLabel="Audio output options"
       hitSlop={10}
-      style={{ width: 38, height: 38, alignItems: 'center', justifyContent: 'center' }}
+      style={routeButtonStyle}
     >
       <Ionicons name="radio-outline" size={26} color="rgba(255,255,255,0.68)" />
     </TouchableOpacity>

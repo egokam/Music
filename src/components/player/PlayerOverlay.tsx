@@ -3,6 +3,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BackHandler, Pressable, Text, TouchableOpacity, View, useWindowDimensions, type GestureResponderEvent } from 'react-native';
+import { GlassView, isGlassEffectAPIAvailable, isLiquidGlassAvailable } from 'expo-glass-effect';
 import { Ionicons } from '@expo/vector-icons';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { scheduleOnRN } from 'react-native-worklets';
@@ -13,6 +14,8 @@ import { PlayerOutputRouteButton } from './PlayerOutputRouteButton';
 import { PlayerQueuePanel } from './PlayerQueuePanel';
 import { PlayerSlider } from './PlayerSlider';
 import type { Track } from '../../types';
+
+const HAS_LIQUID_GLASS = isLiquidGlassAvailable() && isGlassEffectAPIAvailable();
 
 const PlayerOverlayView = ({
   visible,
@@ -369,10 +372,19 @@ const PlayerOverlayView = ({
     right: interpolate(progress.value, [0, 1], [16, 0]),
     top: interpolate(progress.value, [0, 1], [miniTop, 0]),
     bottom: interpolate(progress.value, [0, 1], [miniBottom, 0]),
+    borderWidth: interpolate(progress.value, [0, 1], [1, 0]),
+    borderColor: interpolateColor(
+      progress.value,
+      [0, 1],
+      ['rgba(255,255,255,0.14)', 'rgba(255,255,255,0)'],
+    ),
     borderTopLeftRadius: interpolate(progress.value, [0, 1], [32, 40]),
     borderTopRightRadius: interpolate(progress.value, [0, 1], [32, 40]),
     borderBottomLeftRadius: interpolate(progress.value, [0, 1], [32, 0]),
     borderBottomRightRadius: interpolate(progress.value, [0, 1], [32, 0]),
+  }));
+  const expandedSurfaceStyle = useAnimatedStyle(() => ({
+    opacity: progress.value,
   }));
   const backdropStyle = useAnimatedStyle(() => ({
     opacity: interpolate(progress.value, [0, 1], [0, 0.42]),
@@ -542,7 +554,7 @@ const PlayerOverlayView = ({
             {
               position: 'absolute',
               overflow: 'hidden',
-              backgroundColor: 'rgba(28, 28, 30, 0.96)',
+              backgroundColor: 'transparent',
               shadowColor: '#000000',
               shadowOpacity: 0.28,
               shadowRadius: 18,
@@ -552,6 +564,26 @@ const PlayerOverlayView = ({
             frameStyle,
           ]}
         >
+          {HAS_LIQUID_GLASS ? (
+            <GlassView
+              pointerEvents="none"
+              glassEffectStyle="regular"
+              colorScheme="dark"
+              style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+            />
+          ) : (
+            <View
+              pointerEvents="none"
+              style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(32,32,36,0.92)' }}
+            />
+          )}
+          <ReanimatedAnimated.View
+            pointerEvents="none"
+            style={[
+              { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(28,28,30,0.96)' },
+              expandedSurfaceStyle,
+            ]}
+          />
           <ReanimatedAnimated.Image
             source={renderedTrack.artwork ? { uri: renderedTrack.artwork, headers: renderedTrack.provider === 'local' ? getMusicApiHeaders() : undefined } : undefined}
             resizeMode="cover"
