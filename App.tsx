@@ -9,6 +9,7 @@ import * as SecureStore from 'expo-secure-store';
 import { CustomTabBar } from './src/components/navigation/CustomTabBar';
 import { PlayerOverlay } from './src/components/player/PlayerOverlay';
 import { PlaybackContext, RadioPlaybackStatusContext } from './src/contexts/PlaybackContext';
+import { systemMediaControls } from './src/native/SystemMediaControls';
 import { AUDIO_MIXES, AudiusCatalogService, type AudiusMixId } from './src/services/AudiusCatalogService';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { LibraryScreen } from './src/screens/LibraryScreen';
@@ -607,6 +608,21 @@ export default function App() {
       playSelectedTrack(currentQueue[previousIndex], currentQueue);
     }
   }, [playSelectedTrack, player]);
+
+  useEffect(() => {
+    const mediaControls = systemMediaControls;
+    if (!mediaControls) return;
+
+    const nextTrackSubscription = mediaControls.addListener('onNextTrackRequested', skipNext);
+    const previousTrackSubscription = mediaControls.addListener('onPreviousTrackRequested', skipPrevious);
+    mediaControls.setEnabled(true);
+
+    return () => {
+      nextTrackSubscription.remove();
+      previousTrackSubscription.remove();
+      mediaControls.setEnabled(false);
+    };
+  }, [skipNext, skipPrevious]);
 
   const seekTo = useCallback((seconds: number) => {
     void player.seekTo(Math.max(0, seconds));
