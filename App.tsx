@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, NativeModules } from 'react-native';
+import { Alert, Linking, NativeModules } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -10,6 +10,7 @@ import { CustomTabBar } from './src/components/navigation/CustomTabBar';
 import { PlayerOverlay } from './src/components/player/PlayerOverlay';
 import { PlaybackContext, RadioPlaybackStatusContext } from './src/contexts/PlaybackContext';
 import { systemMediaControls } from './src/native/SystemMediaControls';
+import { NowPlayingWidgetService } from './src/services/NowPlayingWidgetService';
 import { AUDIO_MIXES, AudiusCatalogService, type AudiusMixId } from './src/services/AudiusCatalogService';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { LibraryScreen } from './src/screens/LibraryScreen';
@@ -62,6 +63,17 @@ const isMusicApiAuthenticationError = (error: unknown) => {
   return message.includes('valid musiqapp api token') || message.includes('music server returned 401');
 };
 
+const getWidgetLaunchTrackId = (url: string) => {
+  const prefix = 'musiqapp://widget/play?trackId=';
+  if (!url.startsWith(prefix)) return null;
+  const encodedTrackId = url.slice(prefix.length).split('&')[0];
+  try {
+    return decodeURIComponent(encodedTrackId) || null;
+  } catch {
+    return null;
+  }
+};
+
 export default function App() {
   const player = useAudioPlayer(null, { updateInterval: 250 });
   const playerStatus = useAudioPlayerStatus(player);
@@ -78,6 +90,7 @@ export default function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [downloadingTrackIds, setDownloadingTrackIds] = useState<string[]>([]);
   const [playerVisible, setPlayerVisible] = useState(false);
+  const [widgetLaunchTrackId, setWidgetLaunchTrackId] = useState<string | null>(null);
   const [playbackQueue, setPlaybackQueue] = useState<Track[]>([]);
   const [shuffleEnabled, setShuffleEnabled] = useState(false);
   const [repeatMode, setRepeatMode] = useState<'off' | 'all' | 'one'>('off');
@@ -161,6 +174,23 @@ export default function App() {
       shouldPlayInBackground: true,
       interruptionMode: 'doNotMix',
     }).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    const handleURL = (url: string) => {
+      const trackId = getWidgetLaunchTrackId(url);
+      if (trackId) setWidgetLaunchTrackId(trackId);
+    };
+    const subscription = Linking.addEventListener('url', ({ url }) => handleURL(url));
+    void Linking.getInitialURL().then((url) => {
+      if (mounted && url) handleURL(url);
+    }).catch(() => undefined);
+
+    return () => {
+      mounted = false;
+      subscription.remove();
+    };
   }, []);
 
   useEffect(() => {
@@ -329,6 +359,7 @@ export default function App() {
         favoriteStateLoaded.current = true;
         setIsLoadingTracks(false);
       }
+      void NowPlayingWidgetService.initialize().catch(() => undefined);
       setApiInitializing(false);
     }).catch(() => {
       if (mounted) {
@@ -433,6 +464,11 @@ export default function App() {
     playSelectedTrack(track, queue);
   }, [playSelectedTrack]);
 
+  useEffect(() => {
+    if (!activeTrack) return;
+    void NowPlayingWidgetService.update(activeTrack, playerStatus.playing).catch(() => undefined);
+  }, [activeTrack, playerStatus.playing]);
+
   const loadMoreAudiusMixTracks = useCallback(async (mixId: string) => {
     if (!AUDIO_MIXES.some((mix) => mix.id === mixId) || loadingAudiusMixPages.current.has(mixId)) return;
     loadingAudiusMixPages.current.add(mixId);
@@ -458,6 +494,33 @@ export default function App() {
     if (playerPlayingRef.current) player.pause();
     else player.play();
   }, [player]);
+
+  useEffect(() => {
+    if (!widgetLaunchTrackId || apiInitializing) return;
+    let cancelled = false;
+
+    const playWidgetTrack = async () => {
+      const selectedTrack = tracksRef.current.find((track) => track.id === widgetLaunchTrackId)
+        ?? await NowPlayingWidgetService.getSavedTrack();
+      if (cancelled || !selectedTrack || selectedTrack.id !== widgetLaunchTrackId) return;
+
+      setWidgetLaunchTrackId(null);
+      if (activeTrackRef.current?.id === selectedTrack.id) {
+        togglePlayback();
+        return;
+      }
+
+      const nextQueue = tracksRef.current.some((track) => track.id === selectedTrack.id)
+        ? tracksRef.current
+        : [selectedTrack];
+      playTrack(selectedTrack, nextQueue);
+    };
+
+    void playWidgetTrack().catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [apiInitializing, playTrack, togglePlayback, tracks, widgetLaunchTrackId]);
 
   const openPlayer = useCallback(() => {
     setPlayerVisible(true);

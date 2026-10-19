@@ -2,6 +2,7 @@
   "expo": {
     "name": "Music",
     "slug": "musiqapp",
+    "scheme": "musiqapp",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -46,6 +47,22 @@
           "photosPermission": "Allow Music to choose an image for your playlist cover.",
           "cameraPermission": false,
           "microphonePermission": false
+        }
+      ],
+      [
+        "expo-widgets",
+        {
+          "widgets": [
+            {
+              "name": "MusiqNowPlaying",
+              "displayName": "Musiqapp",
+              "description": "See and play the track currently on Musiqapp.",
+              "ios": {
+                "supportedFamilies": ["systemMedium"],
+                "contentMarginsDisabled": true
+              }
+            }
+          ]
         }
       ]
     ],
