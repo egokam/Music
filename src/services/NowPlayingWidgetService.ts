@@ -72,7 +72,8 @@ const getWidget = (): WidgetHandle | null => {
     widgetDirectory = widgetApi.widgetsDirectory;
     widgetHandle = widgetModule.default;
     return widgetHandle;
-  } catch {
+  } catch (error) {
+    console.warn('[NowPlayingWidget] Could not load the native widget module:', error);
     return null;
   }
 };

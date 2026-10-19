@@ -335,6 +335,15 @@ export default function App() {
   }, [apiConnected]);
 
   useEffect(() => {
+    // Register the widget layout as soon as the app starts. Keep this independent
+    // from library/storage hydration so an unrelated startup failure cannot leave
+    // WidgetKit without a layout in the shared app-group container.
+    void NowPlayingWidgetService.initialize().catch((error) => {
+      console.warn('[NowPlayingWidget] Initialization failed:', error);
+    });
+  }, []);
+
+  useEffect(() => {
     let mounted = true;
     void Promise.all([
       OfflineMusicService.getDownloadedTracks(),
@@ -361,7 +370,6 @@ export default function App() {
         favoriteStateLoaded.current = true;
         setIsLoadingTracks(false);
       }
-      void NowPlayingWidgetService.initialize().catch(() => undefined);
       setApiInitializing(false);
     }).catch(() => {
       if (mounted) {

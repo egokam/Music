@@ -55,6 +55,7 @@
           "microphonePermission": false
         }
       ],
+      "./plugins/withMusiqNativeWidget",
       [
         "expo-widgets",
         {
