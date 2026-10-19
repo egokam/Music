@@ -1,4 +1,5 @@
 import { Directory, File, Paths } from 'expo-file-system';
+import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { getMusicApiHeaders } from './MusicCatalogService';
 import type { Track } from '../types';
@@ -56,6 +57,8 @@ const saveTrack = (track: Track) => {
 
 const getWidget = (): WidgetHandle | null => {
   if (Platform.OS !== 'ios') return null;
+  // expo-widgets is a native module and is not included in Expo Go.
+  if (Constants.expoGoConfig) return null;
   if (widgetHandle) return widgetHandle;
 
   try {

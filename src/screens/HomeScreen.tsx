@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   ActivityIndicator,
@@ -8,6 +8,7 @@ import {
   Linking,
   RefreshControl,
   ScrollView,
+  StyleSheet,
   Text,
   TouchableOpacity,
   View,
@@ -21,7 +22,7 @@ import { FontAwesome, Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { usePlaybackActions } from '../contexts/PlaybackContext';
-import { AUDIO_MIXES, AudiusCatalogService, type AudiusMixDefinition, type AudiusMixId } from '../services/AudiusCatalogService';
+import { AMBIENT_MOODS, AUDIO_MIXES, AudiusCatalogService, type AmbientMoodId, type AudiusMixDefinition, type AudiusMixId } from '../services/AudiusCatalogService';
 import type { Track } from '../types';
 
 type HomeNavigation = BottomTabNavigationProp<{
@@ -43,6 +44,17 @@ type RadioStation = {
 };
 
 type MixTracks = Record<AudiusMixId, Track[]>;
+type AmbientFeed = {
+  moodId: AmbientMoodId;
+  tracks: Track[];
+  offset: number;
+  hasMore: boolean;
+  loading: boolean;
+  loadingMore: boolean;
+  error: string | null;
+};
+
+const AMBIENT_PAGE_SIZE = 18;
 
 const RADIO_DIRECTORY_MIRRORS = [
   'https://de1.api.radio-browser.info',
@@ -260,11 +272,77 @@ const LiveRadioCard = memo(({
 });
 LiveRadioCard.displayName = 'LiveRadioCard';
 
+const AmbientTrackRow = memo(({
+  track,
+  active,
+  onPress,
+  onOpenSource,
+}: {
+  track: Track;
+  active: boolean;
+  onPress: () => void;
+  onOpenSource: () => void;
+}) => {
+  const [failedArtwork, setFailedArtwork] = useState('');
+  const hasArtwork = Boolean(track.artwork) && failedArtwork !== track.artwork;
+
+  return (
+    <View style={{ minHeight: 70, flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#252528' }}>
+      <TouchableOpacity
+        onPress={onPress}
+        activeOpacity={0.78}
+        accessibilityRole="button"
+        accessibilityLabel={`${active ? 'Pause' : 'Play'} ${track.title} by ${track.artist}`}
+        style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center' }}
+      >
+        <View style={{ width: 52, height: 52, borderRadius: 13, overflow: 'hidden', backgroundColor: '#17171A', alignItems: 'center', justifyContent: 'center' }}>
+          {hasArtwork ? (
+            <Image source={{ uri: track.artwork }} onError={() => setFailedArtwork(track.artwork)} resizeMode="cover" style={{ width: '100%', height: '100%' }} />
+          ) : (
+            <LinearGradient colors={['#392A3C', '#17171A']} style={{ width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' }}>
+              <Ionicons name="sparkles-outline" size={22} color="#C7A9D9" />
+            </LinearGradient>
+          )}
+        </View>
+        <View style={{ flex: 1, minWidth: 0, marginLeft: 12 }}>
+          <Text numberOfLines={1} style={{ color: active ? '#FA5265' : 'white', fontSize: 15, fontWeight: '700' }}>{track.title}</Text>
+          <Text numberOfLines={1} style={{ color: '#A1A1A6', fontSize: 13, fontWeight: '500', marginTop: 4 }}>{track.artist}</Text>
+          <Text numberOfLines={1} style={{ color: '#69696F', fontSize: 10, fontWeight: '600', marginTop: 3 }}>Audius · Ambient</Text>
+        </View>
+        <View style={{ width: 35, alignItems: 'flex-end', marginLeft: 8 }}>
+          <Text style={{ color: '#77777D', fontSize: 11, fontWeight: '600' }}>{track.duration}</Text>
+        </View>
+      </TouchableOpacity>
+      {track.shareUrl ? (
+        <TouchableOpacity onPress={onOpenSource} hitSlop={9} accessibilityRole="button" accessibilityLabel={`Open ${track.title} on Audius`} style={{ width: 34, height: 42, alignItems: 'center', justifyContent: 'center', marginLeft: 4 }}>
+          <Ionicons name="open-outline" size={17} color="#8E8E93" />
+        </TouchableOpacity>
+      ) : null}
+      <TouchableOpacity onPress={onPress} hitSlop={9} accessibilityRole="button" accessibilityLabel={`${active ? 'Pause' : 'Play'} ${track.title}`} style={{ width: 36, height: 42, alignItems: 'center', justifyContent: 'center', marginLeft: 3 }}>
+        <Ionicons name={active ? 'pause-circle' : 'play-circle'} size={27} color={active ? '#FA5265' : 'white'} />
+      </TouchableOpacity>
+    </View>
+  );
+});
+AmbientTrackRow.displayName = 'AmbientTrackRow';
+
 export const HomeScreen = () => {
   const navigation = useNavigation<HomeNavigation>();
   const { width: screenWidth } = useWindowDimensions();
   const { activeTrack, playTrack, togglePlayback } = usePlaybackActions();
   const [mixTracks, setMixTracks] = useState<MixTracks>(emptyMixTracks);
+  const [ambientMood, setAmbientMood] = useState<AmbientMoodId>('sleep');
+  const [ambientRetryKey, setAmbientRetryKey] = useState(0);
+  const [ambientFeed, setAmbientFeed] = useState<AmbientFeed>({
+    moodId: 'sleep',
+    tracks: [],
+    offset: 0,
+    hasMore: true,
+    loading: true,
+    loadingMore: false,
+    error: null,
+  });
+  const ambientRequestId = useRef(0);
   const [stations, setStations] = useState<RadioStation[]>([]);
   const [mixLoading, setMixLoading] = useState(true);
   const [radioLoading, setRadioLoading] = useState(true);
@@ -313,6 +391,47 @@ export const HomeScreen = () => {
     return () => { mounted = false; };
   }, [refreshKey]);
 
+  useEffect(() => {
+    const requestId = ++ambientRequestId.current;
+    setAmbientFeed({
+      moodId: ambientMood,
+      tracks: [],
+      offset: 0,
+      hasMore: true,
+      loading: true,
+      loadingMore: false,
+      error: null,
+    });
+
+    void AudiusCatalogService.getAmbientTracks(ambientMood, 0, AMBIENT_PAGE_SIZE).then((tracks) => {
+      if (ambientRequestId.current !== requestId) return;
+      setAmbientFeed({
+        moodId: ambientMood,
+        tracks,
+        offset: AMBIENT_PAGE_SIZE,
+        hasMore: tracks.length === AMBIENT_PAGE_SIZE,
+        loading: false,
+        loadingMore: false,
+        error: null,
+      });
+    }).catch((error: unknown) => {
+      if (ambientRequestId.current !== requestId) return;
+      setAmbientFeed({
+        moodId: ambientMood,
+        tracks: [],
+        offset: 0,
+        hasMore: false,
+        loading: false,
+        loadingMore: false,
+        error: error instanceof Error ? error.message : 'Ambient music could not be loaded.',
+      });
+    });
+
+    return () => {
+      if (ambientRequestId.current === requestId) ambientRequestId.current += 1;
+    };
+  }, [ambientMood, refreshKey, ambientRetryKey]);
+
   const radioTracks = useMemo(() => stations.map(toStationTrack), [stations]);
   const refreshDiscovery = useCallback(() => {
     setMixLoading(true);
@@ -327,6 +446,54 @@ export const HomeScreen = () => {
     if (queue.length > 0) playTrack(queue[0], queue);
     else refreshDiscovery();
   }, [mixTracks, playTrack, refreshDiscovery]);
+
+  const loadMoreAmbientTracks = useCallback(async () => {
+    if (ambientFeed.moodId !== ambientMood || ambientFeed.loading || ambientFeed.loadingMore || !ambientFeed.hasMore) return;
+    const moodId = ambientMood;
+    const offset = ambientFeed.offset;
+    const requestId = ambientRequestId.current;
+    setAmbientFeed((current) => current.moodId === moodId ? { ...current, loadingMore: true, error: null } : current);
+
+    try {
+      const nextTracks = await AudiusCatalogService.getAmbientTracks(moodId, offset, AMBIENT_PAGE_SIZE);
+      if (ambientRequestId.current !== requestId) return;
+      setAmbientFeed((current) => {
+        if (current.moodId !== moodId) return current;
+        const seen = new Set(current.tracks.map((track) => track.id));
+        const uniqueTracks = nextTracks.filter((track) => !seen.has(track.id));
+        return {
+          ...current,
+          tracks: [...current.tracks, ...uniqueTracks],
+          offset: offset + AMBIENT_PAGE_SIZE,
+          hasMore: nextTracks.length === AMBIENT_PAGE_SIZE,
+          loadingMore: false,
+          error: null,
+        };
+      });
+    } catch (error) {
+      if (ambientRequestId.current !== requestId) return;
+      setAmbientFeed((current) => current.moodId === moodId ? {
+        ...current,
+        loadingMore: false,
+        error: error instanceof Error ? error.message : 'More Ambient music could not be loaded.',
+      } : current);
+    }
+  }, [ambientFeed, ambientMood]);
+
+  const playAmbientTrack = useCallback((track: Track) => {
+    if (activeTrack?.id === track.id) {
+      togglePlayback();
+      return;
+    }
+    const queue = ambientFeed.moodId === ambientMood && ambientFeed.tracks.length > 0
+      ? ambientFeed.tracks
+      : [track];
+    playTrack(track, queue);
+  }, [activeTrack?.id, ambientFeed, ambientMood, playTrack, togglePlayback]);
+
+  const openAmbientSource = useCallback((track: Track) => {
+    if (track.shareUrl) void Linking.openURL(track.shareUrl).catch(() => undefined);
+  }, []);
 
   const playStation = useCallback((station: RadioStation) => {
     const track = toStationTrack(station);
@@ -363,7 +530,7 @@ export const HomeScreen = () => {
     <SafeAreaView style={{ flex: 1, backgroundColor: '#000000' }} edges={['top']}>
       <ScrollView
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={mixLoading || radioLoading} onRefresh={refreshDiscovery} tintColor="#FA5265" colors={['#FA5265']} />}
+        refreshControl={<RefreshControl refreshing={mixLoading || radioLoading || ambientFeed.loading} onRefresh={refreshDiscovery} tintColor="#FA5265" colors={['#FA5265']} />}
         contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 190 }}
       >
         <Animated.View style={{ opacity: introOpacity, transform: [{ translateY: introY }] }}>
@@ -413,6 +580,92 @@ export const HomeScreen = () => {
               <Text style={{ color: '#A1A1A6', fontSize: 12, marginLeft: 7 }}>Couldn’t load mixes. Tap to retry.</Text>
             </TouchableOpacity>
           ) : null}
+
+          <View style={{ marginTop: 37, marginBottom: 15 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <View style={{ width: 37, height: 37, borderRadius: 19, backgroundColor: '#211925', alignItems: 'center', justifyContent: 'center', marginRight: 10 }}>
+                <Ionicons name="sparkles" size={19} color="#D4B2E4" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: 'white', fontSize: 24, lineHeight: 30, fontWeight: '800', letterSpacing: -0.45 }}>Ambient</Text>
+                <Text style={{ color: '#8E8E93', fontSize: 12, fontWeight: '500', marginTop: 2 }}>Instrumental sounds for your moment</Text>
+              </View>
+              {ambientFeed.loading ? <ActivityIndicator color="#D4B2E4" size="small" /> : (
+                <TouchableOpacity onPress={() => setAmbientRetryKey((current) => current + 1)} hitSlop={10} accessibilityRole="button" accessibilityLabel="Refresh Ambient music" style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: '#171719', alignItems: 'center', justifyContent: 'center' }}>
+                  <Ionicons name="refresh" size={17} color="#B7B7BC" />
+                </TouchableOpacity>
+              )}
+            </View>
+            <Text style={{ color: '#77777D', fontSize: 12, fontWeight: '500', marginTop: 8, marginLeft: 47 }}>
+              Independent tracks from Audius · mostly instrumental
+            </Text>
+          </View>
+
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: 10 }}>
+            {AMBIENT_MOODS.map((mood) => {
+              const selected = mood.id === ambientMood;
+              return (
+                <TouchableOpacity
+                  key={mood.id}
+                  onPress={() => setAmbientMood(mood.id)}
+                  activeOpacity={0.75}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected }}
+                  style={{ minHeight: 38, paddingHorizontal: 15, borderRadius: 20, backgroundColor: selected ? '#30202D' : '#141416', borderWidth: 1, borderColor: selected ? '#76516F' : '#262629', alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Text style={{ color: selected ? '#F0D8F4' : '#A1A1A6', fontSize: 13, fontWeight: selected ? '700' : '600' }}>{mood.title}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+
+          <Text style={{ color: '#8E8E93', fontSize: 13, fontWeight: '500', marginBottom: 4 }}>
+            {AMBIENT_MOODS.find((mood) => mood.id === ambientMood)?.description}
+          </Text>
+
+          {ambientFeed.loading || ambientFeed.moodId !== ambientMood ? (
+            <View style={{ minHeight: 112, alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+              <ActivityIndicator color="#D4B2E4" />
+              <Text style={{ color: '#77777D', fontSize: 12, fontWeight: '500' }}>Finding ambient tracks…</Text>
+            </View>
+          ) : ambientFeed.error && ambientFeed.tracks.length === 0 ? (
+            <TouchableOpacity onPress={() => setAmbientRetryKey((current) => current + 1)} activeOpacity={0.75} style={{ minHeight: 92, borderRadius: 18, backgroundColor: '#121214', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, paddingHorizontal: 18 }}>
+              <Ionicons name="cloud-offline-outline" size={19} color="#D4B2E4" />
+              <Text style={{ color: '#A1A1A6', fontSize: 13, fontWeight: '600', flexShrink: 1 }}>Couldn’t load ambient music · tap to retry</Text>
+            </TouchableOpacity>
+          ) : ambientFeed.tracks.length > 0 ? (
+            <View>
+              {ambientFeed.tracks.map((track) => (
+                <AmbientTrackRow
+                  key={track.id}
+                  track={track}
+                  active={activeTrack?.id === track.id}
+                  onPress={() => playAmbientTrack(track)}
+                  onOpenSource={() => openAmbientSource(track)}
+                />
+              ))}
+              {ambientFeed.error ? (
+                <Text style={{ color: '#A1A1A6', fontSize: 12, marginTop: 10 }}>{ambientFeed.error}</Text>
+              ) : null}
+              {ambientFeed.hasMore ? (
+                <TouchableOpacity
+                  onPress={() => void loadMoreAmbientTracks()}
+                  disabled={ambientFeed.loadingMore}
+                  activeOpacity={0.75}
+                  accessibilityRole="button"
+                  accessibilityLabel="Load more Ambient tracks"
+                  style={{ minHeight: 46, borderRadius: 23, backgroundColor: '#17171A', borderWidth: 1, borderColor: '#2B2B30', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 13 }}
+                >
+                  {ambientFeed.loadingMore ? <ActivityIndicator color="#D4B2E4" size="small" /> : <Ionicons name="add" size={18} color="#D4B2E4" />}
+                  <Text style={{ color: '#D7D7DC', fontSize: 13, fontWeight: '700' }}>{ambientFeed.loadingMore ? 'Loading tracks…' : 'Load more tracks'}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ) : (
+            <View style={{ minHeight: 92, borderRadius: 18, backgroundColor: '#121214', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18 }}>
+              <Text style={{ color: '#A1A1A6', fontSize: 13, fontWeight: '600', textAlign: 'center' }}>No tracks found for this mood right now. Try another mood or refresh.</Text>
+            </View>
+          )}
 
           <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 37, marginBottom: 15 }}>
             <Text style={{ flex: 1, color: 'white', fontSize: 24, lineHeight: 30, fontWeight: '800', letterSpacing: -0.45 }}>Live Radio Stations</Text>

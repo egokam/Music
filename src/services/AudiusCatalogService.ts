@@ -10,6 +10,23 @@ export type AudiusMixDefinition = {
   glow: string;
 };
 
+export type AmbientMoodId = 'sleep' | 'productivity' | 'chill' | 'wellbeing';
+
+export type AmbientMoodDefinition = {
+  id: AmbientMoodId;
+  title: string;
+  description: string;
+  query?: string;
+  audiusMood: 'Peaceful' | 'Easygoing';
+};
+
+export const AMBIENT_MOODS: AmbientMoodDefinition[] = [
+  { id: 'sleep', title: 'Sleep', description: 'Quiet soundscapes to wind down', query: 'ambient sleep instrumental', audiusMood: 'Peaceful' },
+  { id: 'productivity', title: 'Productivity', description: 'Gentle focus for your work', audiusMood: 'Easygoing' },
+  { id: 'chill', title: 'Chill', description: 'Mellow music for slower moments', query: 'ambient chill instrumental', audiusMood: 'Easygoing' },
+  { id: 'wellbeing', title: 'Wellbeing', description: 'Restorative meditation ambience', query: 'ambient meditation instrumental', audiusMood: 'Peaceful' },
+];
+
 export const AUDIO_MIXES: AudiusMixDefinition[] = [
   { id: 'arabic', title: 'Arabic Trending', query: 'arabic', sortMethod: 'popular', glow: '#F26A31' },
   { id: 'morocco', title: 'Morocco', query: 'moroccan', sortMethod: 'popular', glow: '#D53D5B' },
@@ -106,6 +123,30 @@ export const AudiusCatalogService = {
     if (!Array.isArray(payload.data)) throw new Error('Audius returned an invalid track list.');
     return payload.data
       .map((item, index) => toTrack(item, mixId, offset + index))
+      .filter((track): track is Track => track !== null);
+  },
+
+  async getAmbientTracks(moodId: AmbientMoodId, offset = 0, limit = DEFAULT_PAGE_SIZE): Promise<Track[]> {
+    const mood = AMBIENT_MOODS.find((item) => item.id === moodId);
+    if (!mood) throw new Error('This Ambient collection is unavailable.');
+
+    const params = new URLSearchParams({
+      genre: 'Ambient',
+      mood: mood.audiusMood,
+      sort_method: 'popular',
+      limit: String(limit),
+      offset: String(offset),
+    });
+    if (mood.query) params.set('query', mood.query);
+    const response = await fetch(`${AUDIUS_API}/tracks/search?${params.toString()}`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) throw new Error(`Audius returned ${response.status}.`);
+
+    const payload = await response.json() as { data?: AudiusTrack[] };
+    if (!Array.isArray(payload.data)) throw new Error('Audius returned an invalid Ambient track list.');
+    return payload.data
+      .map((item) => toTrack(item))
       .filter((track): track is Track => track !== null);
   },
 };

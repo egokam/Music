@@ -17,6 +17,7 @@ import { LibraryScreen } from './src/screens/LibraryScreen';
 import { RadioScreen } from './src/screens/RadioScreen';
 import { SearchScreen } from './src/screens/SearchScreen';
 import { MusicCatalogService, getMusicApiHeaders, parseLyrics, setMusicApiToken, type TrackEditChanges } from './src/services/MusicCatalogService';
+import { LrcCheckerService } from './src/services/LrcCheckerService';
 import { OfflineMusicService } from './src/services/OfflineMusicService';
 import { PlaylistStorageService } from './src/services/PlaylistStorageService';
 import type { PlaylistCoverSelection, PlaylistSummary, Track } from './src/types';
@@ -352,6 +353,7 @@ export default function App() {
       if (savedToken) {
         setMusicApiToken(savedToken);
         setApiConnected(true);
+        void LrcCheckerService.resumeIfNeeded().catch(() => undefined);
         void searchTracks();
         void loadFavoriteTracks().catch(() => undefined);
         void loadPlaylists();
@@ -380,6 +382,7 @@ export default function App() {
       const remoteTracks = await MusicCatalogService.searchTracks();
       await SecureStore.setItemAsync('musiqapp_api_token', token);
       setApiConnected(true);
+      void LrcCheckerService.resumeIfNeeded().catch(() => undefined);
       setLoadError(null);
       setIsLoadingTracks(false);
       const offlineById = new Map(downloadsRef.current.map((track) => [track.id, track]));

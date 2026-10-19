@@ -13,6 +13,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LrcCheckerRow, type LrcCheckState } from '../components/library/LrcCheckerRow';
+import { LrcCheckerService } from '../services/LrcCheckerService';
 import type { Track } from '../types';
 
 const hasTimedLyrics = (track: Track) => Boolean(
@@ -93,14 +94,8 @@ export const LrcCheckerScreen = ({
   onCheckTrack: (track: Track) => Promise<Track>;
   onSaveTrackLyrics: (track: Track, syncedLyrics: string) => Promise<Track>;
 }) => {
-  const [states, setStates] = useState<Record<string, LrcCheckState>>({});
-  const [results, setResults] = useState<Record<string, Track>>({});
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [scanSnapshot, setScanSnapshot] = useState(() => LrcCheckerService.getSnapshot());
   const [search, setSearch] = useState('');
-  const [isScanning, setIsScanning] = useState(false);
-  const [isStopping, setIsStopping] = useState(false);
-  const [isLoadingCatalog, setIsLoadingCatalog] = useState(false);
-  const [progress, setProgress] = useState({ completed: 0, total: 0 });
   const [isApplyingAll, setIsApplyingAll] = useState(false);
   const [applyAllProgress, setApplyAllProgress] = useState({ completed: 0, total: 0 });
   const [reviewTrack, setReviewTrack] = useState<Track | null>(null);
@@ -110,18 +105,23 @@ export const LrcCheckerScreen = ({
   const [customLrcPreview, setCustomLrcPreview] = useState(false);
   const [customLrcError, setCustomLrcError] = useState<string | null>(null);
   const [isSavingCustomLrc, setIsSavingCustomLrc] = useState(false);
-  const [scanError, setScanError] = useState<string | null>(null);
-  const scanGeneration = useRef(0);
-  const stopRequested = useRef(false);
-  const scanRunning = useRef(false);
   const applyAllRunning = useRef(false);
 
-  useEffect(() => () => {
-    scanGeneration.current += 1;
-    stopRequested.current = true;
+  useEffect(() => {
+    let mounted = true;
+    const unsubscribe = LrcCheckerService.subscribe((snapshot) => {
+      if (mounted) setScanSnapshot(snapshot);
+    });
+    void LrcCheckerService.hydrate().then(() => {
+      if (mounted) setScanSnapshot(LrcCheckerService.getSnapshot());
+    });
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
   }, []);
 
-  const stateFor = (track: Track): LrcCheckState => states[track.id] ?? (
+  const stateFor = (track: Track): LrcCheckState => scanSnapshot.records[track.id]?.state ?? (
     hasTimedLyrics(track) || track.hasSyncedLyrics
       ? 'synced'
       : track.hasPlainLyrics || track.plainLyrics?.trim()
@@ -131,100 +131,32 @@ export const LrcCheckerScreen = ({
   const syncedCount = tracks.reduce((count, track) => count + (stateFor(track) === 'synced' ? 1 : 0), 0);
   const checkedCount = tracks.reduce((count, track) => count + (['synced', 'plain', 'missing', 'candidate'].includes(stateFor(track)) ? 1 : 0), 0);
   const pendingLyricMatches = tracks.filter((track) =>
-    stateFor(track) === 'candidate' && isTimedLrc(results[track.id]?.syncedLyrics),
+    stateFor(track) === 'candidate' && isTimedLrc(scanSnapshot.records[track.id]?.result?.syncedLyrics),
   );
   const filteredTracks = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
     return tracks.filter((track) => `${track.title} ${track.artist} ${track.album}`.toLocaleLowerCase().includes(query));
   }, [search, tracks]);
 
-  const checkTrack = async (track: Track, generation?: number, openPreview = false) => {
-    setStates((current) => ({ ...current, [track.id]: 'checking' }));
-    setErrors((current) => ({ ...current, [track.id]: '' }));
-    try {
-      const result = await onCheckTrack(track);
-      if (generation !== undefined && generation !== scanGeneration.current) return result;
-      setResults((current) => ({ ...current, [track.id]: result }));
-      const nextState: LrcCheckState = isTimedLrc(result.syncedLyrics)
-        ? result.lyricsSource === 'local_lrc' || result.lyricsSource === 'embedded_lrc' ? 'synced' : 'candidate'
-        : result.plainLyrics?.trim() ? 'plain' : 'missing';
-      setStates((current) => ({ ...current, [track.id]: nextState }));
-      if (openPreview && nextState === 'candidate') setReviewTrack(result);
-      return result;
-    } catch (error) {
-      if (generation === undefined || generation === scanGeneration.current) {
-        setStates((current) => ({ ...current, [track.id]: 'error' }));
-        setErrors((current) => ({
-          ...current,
-          [track.id]: error instanceof Error ? error.message : 'The lyrics service request failed. Try again later.',
-        }));
-      }
-      throw error;
-    }
+  const checkTrack = async (track: Track, _generation?: number, openPreview = false) => {
+    const record = await LrcCheckerService.checkTrack(track, onCheckTrack);
+    const result = record.result ?? track;
+    if (openPreview && record.state === 'candidate') setReviewTrack(result);
+    return result;
   };
 
   const scanAll = async () => {
-    if (scanRunning.current || applyAllRunning.current) return;
+    if (scanSnapshot.isScanning || scanSnapshot.isLoadingCatalog || applyAllRunning.current) return;
     if (!apiConnected) {
       onConnect();
       return;
     }
 
-    const generation = ++scanGeneration.current;
-    scanRunning.current = true;
-    stopRequested.current = false;
-    setIsStopping(false);
-    setIsScanning(true);
-    setScanError(null);
-    setProgress({ completed: 0, total: tracks.length });
-    let libraryTracks = tracks;
-    try {
-      setIsLoadingCatalog(true);
-      libraryTracks = await onLoadAllTracks();
-      if (generation !== scanGeneration.current || stopRequested.current) return;
-      setIsLoadingCatalog(false);
-      setProgress({ completed: 0, total: libraryTracks.length });
-
-      for (let index = 0; index < libraryTracks.length; index += 1) {
-        if (generation !== scanGeneration.current || stopRequested.current) break;
-        const track = libraryTracks[index];
-        if (stateFor(track) === 'synced' || hasTimedLyrics(track)) {
-          if (track.hasSyncedLyrics && !hasTimedLyrics(track) && !results[track.id]?.syncedLyrics) {
-            try {
-              await checkTrack(track, generation);
-            } catch {
-              // Keep the lookup error visible if embedded lyrics could not be loaded.
-            }
-          } else {
-            setStates((current) => ({ ...current, [track.id]: 'synced' }));
-          }
-        } else {
-          try {
-            await checkTrack(track, generation);
-          } catch {
-            // Keep the error on this row and continue checking the rest of the library.
-          }
-        }
-        setProgress({ completed: index + 1, total: libraryTracks.length });
-        if (index < libraryTracks.length - 1 && generation === scanGeneration.current && !stopRequested.current) {
-          await new Promise((resolve) => setTimeout(resolve, 350));
-        }
-      }
-    } catch (error) {
-      setScanError(error instanceof Error ? error.message : 'Could not load the whole music library.');
-    } finally {
-      if (generation === scanGeneration.current) {
-        setIsLoadingCatalog(false);
-        setIsScanning(false);
-        setIsStopping(false);
-      }
-      scanRunning.current = false;
-    }
+    await LrcCheckerService.startScan(onLoadAllTracks, onCheckTrack);
   };
 
   const stopScan = () => {
-    stopRequested.current = true;
-    setIsStopping(true);
+    void LrcCheckerService.stopScan();
   };
 
   const applyAllFoundLyrics = () => {
@@ -254,7 +186,7 @@ export const LrcCheckerScreen = ({
 
     for (let index = 0; index < pendingLyricMatches.length; index += 1) {
       const track = pendingLyricMatches[index];
-      const lyrics = results[track.id]?.syncedLyrics;
+      const lyrics = scanSnapshot.records[track.id]?.result?.syncedLyrics;
       if (!lyrics || !isTimedLrc(lyrics)) {
         failedCount += 1;
         setApplyAllProgress({ completed: index + 1, total: pendingLyricMatches.length });
@@ -262,17 +194,16 @@ export const LrcCheckerScreen = ({
       }
 
       try {
-        const saved = await onSaveTrackLyrics(track, lyrics);
-        setResults((current) => ({ ...current, [track.id]: saved }));
-        setStates((current) => ({ ...current, [track.id]: 'synced' }));
-        setErrors((current) => ({ ...current, [track.id]: '' }));
+        await onSaveTrackLyrics(track, lyrics);
+        await LrcCheckerService.updateRecord(track.id, { state: 'synced' });
         savedCount += 1;
       } catch (error) {
         failedCount += 1;
-        setErrors((current) => ({
-          ...current,
-          [track.id]: error instanceof Error ? error.message : 'Could not save this lyric match.',
-        }));
+        await LrcCheckerService.updateRecord(track.id, {
+          state: 'candidate',
+          result: scanSnapshot.records[track.id]?.result,
+          error: error instanceof Error ? error.message : 'Could not save this lyric match.',
+        });
       }
       setApplyAllProgress({ completed: index + 1, total: pendingLyricMatches.length });
     }
@@ -294,9 +225,7 @@ export const LrcCheckerScreen = ({
     setIsSavingReview(true);
     try {
       const saved = await onSaveTrackLyrics(reviewTrack, reviewTrack.syncedLyrics);
-      setResults((current) => ({ ...current, [reviewTrack.id]: saved }));
-      setStates((current) => ({ ...current, [reviewTrack.id]: 'synced' }));
-      setErrors((current) => ({ ...current, [reviewTrack.id]: '' }));
+      await LrcCheckerService.updateRecord(reviewTrack.id, { state: 'synced', result: saved });
       setReviewTrack(null);
     } catch (error) {
       Alert.alert('Could not save LRC', error instanceof Error ? error.message : 'Try saving this lyric file again.');
@@ -308,14 +237,8 @@ export const LrcCheckerScreen = ({
   const discardReview = () => {
     if (!reviewTrack) return;
     const trackId = reviewTrack.id;
-    setStates((current) => ({
-      ...current,
-      [trackId]: reviewTrack.plainLyrics?.trim() ? 'plain' : 'missing',
-    }));
-    setResults((current) => {
-      const next = { ...current };
-      delete next[trackId];
-      return next;
+    void LrcCheckerService.updateRecord(trackId, {
+      state: reviewTrack.plainLyrics?.trim() ? 'plain' : 'missing',
     });
     setReviewTrack(null);
   };
@@ -359,9 +282,7 @@ export const LrcCheckerScreen = ({
     setIsSavingCustomLrc(true);
     try {
       const saved = await onSaveTrackLyrics(customLrcTrack, customLrcText.trim());
-      setResults((current) => ({ ...current, [customLrcTrack.id]: saved }));
-      setStates((current) => ({ ...current, [customLrcTrack.id]: 'synced' }));
-      setErrors((current) => ({ ...current, [customLrcTrack.id]: '' }));
+      await LrcCheckerService.updateRecord(customLrcTrack.id, { state: 'synced', result: saved });
       setCustomLrcTrack(null);
       setCustomLrcText('');
       setCustomLrcPreview(false);
@@ -382,6 +303,11 @@ export const LrcCheckerScreen = ({
   };
 
   const reviewLines = reviewTrack?.syncedLyrics?.split(/\r?\n/).filter((line) => line.trim()).slice(0, 8) ?? [];
+  const isScanning = scanSnapshot.isScanning;
+  const isStopping = scanSnapshot.isStopping;
+  const isLoadingCatalog = scanSnapshot.isLoadingCatalog;
+  const progress = scanSnapshot.progress;
+  const scanError = scanSnapshot.scanError;
   const isBusy = isScanning || isLoadingCatalog;
 
   return (
@@ -501,17 +427,17 @@ export const LrcCheckerScreen = ({
               <Text style={{ color: '#8E8E93', fontSize: 12, fontWeight: '700', letterSpacing: 0.7, marginTop: 24, marginBottom: 5 }}>
                 YOUR SONGS
               </Text>
-              {scanError ? <Text style={{ color: '#FF6B5E', fontSize: 13, marginTop: 6 }}>{scanError}</Text> : null}
+                {scanError ? <Text style={{ color: '#FF6B5E', fontSize: 13, marginTop: 6 }}>{scanError}</Text> : null}
             </View>
           )}
           renderItem={({ item }) => {
             const state = stateFor(item);
-            const result = results[item.id];
+            const result = scanSnapshot.records[item.id]?.result;
             return (
               <LrcCheckerRow
                 track={item}
                 state={state}
-                errorMessage={errors[item.id]}
+                errorMessage={scanSnapshot.records[item.id]?.error}
                 disabled={isApplyingAll || (isScanning && state !== 'candidate')}
                 onCheck={() => apiConnected ? void checkTrack(item, undefined, true).catch(() => undefined) : onConnect()}
                 onReview={() => result && setReviewTrack(result)}
