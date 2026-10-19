@@ -38,9 +38,10 @@ const NowPlayingWidgetLayout = (props: NowPlayingWidgetProps) => {
     <ZStack
       modifiers={[
         frame({ maxWidth: 10000, maxHeight: 10000 }),
-        containerBackground('#211D22', 'widget'),
         clipShape('roundedRectangle', 26),
         widgetURL(launchUrl),
+        // Keep this outermost so WidgetKit reads the background from the widget root.
+        containerBackground('#211D22', 'widget'),
       ]}
     >
       {props.artworkUri ? (
