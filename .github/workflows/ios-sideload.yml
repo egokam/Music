@@ -1,4 +1,4 @@
-name: Build iOS IPA for Sideloadly
+name: Build iOS IPA for Sideloadly final release 1.0.0
 
 on:
   workflow_dispatch:
