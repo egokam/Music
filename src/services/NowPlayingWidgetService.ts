@@ -13,16 +13,11 @@ const savedTrackFile = new File(Paths.document, 'musiqapp-last-played-track.json
 let widgetHandle: WidgetHandle | null = null;
 let widgetDirectory = '';
 let updateGeneration = 0;
-
-const emptyWidgetSnapshot: NowPlayingWidgetProps = {
-  trackId: '',
-  title: '',
-  artist: '',
-  artworkUri: '',
-  isPlaying: false,
-};
+let sessionTrackId: string | null = null;
 
 const safeFileName = (value: string) => value.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+const getPlayableTracks = (tracks: Track[]) => tracks.filter((track) => Boolean(track.localUri || track.streamUrl));
 
 const artworkHash = (value: string) => {
   let hash = 5381;
@@ -137,21 +132,30 @@ const publishTrack = async (track: Track, isPlaying: boolean, generation: number
 };
 
 export const NowPlayingWidgetService = {
-  async initialize() {
+  async initialize(libraryTracks: Track[] = []) {
     const widget = getWidget();
     if (!widget) return;
 
-    const generation = ++updateGeneration;
-    const savedTrack = await NowPlayingWidgetService.getSavedTrack();
-    if (generation !== updateGeneration) return;
-    if (savedTrack) {
-      await publishTrack(savedTrack, false, generation);
-    } else {
-      widget.updateSnapshot(emptyWidgetSnapshot);
+    // A fresh app process gets one library-backed fallback. Once the user starts
+    // playback, `update` owns the widget for the rest of that process.
+    if (sessionTrackId) return;
+    const candidates = getPlayableTracks(libraryTracks);
+    if (candidates.length === 0) return;
+
+    const selectedTrack = candidates[Math.floor(Math.random() * candidates.length)];
+    sessionTrackId = selectedTrack.id;
+    try {
+      saveTrack(selectedTrack);
+    } catch {
+      // The widget can still display the track if local metadata persistence fails.
     }
+
+    const generation = ++updateGeneration;
+    await publishTrack(selectedTrack, false, generation);
   },
 
   async update(track: Track, isPlaying: boolean) {
+    sessionTrackId = track.id;
     try {
       saveTrack(track);
     } catch {

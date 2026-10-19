@@ -226,15 +226,20 @@ export default function App() {
       }
       tracksRef.current = merged;
       setTracks(merged);
+      if (!query.trim()) {
+        void NowPlayingWidgetService.initialize(merged).catch(() => undefined);
+      }
     } catch (error) {
       if (generation === searchGeneration.current) {
         if (isMusicApiAuthenticationError(error)) {
           setMusicApiToken('');
           setApiConnected(false);
           setTracks(downloadsRef.current);
+          void NowPlayingWidgetService.initialize(downloadsRef.current).catch(() => undefined);
           setLoadError(null);
           void SecureStore.deleteItemAsync('musiqapp_api_token').catch(() => undefined);
         } else {
+          void NowPlayingWidgetService.initialize(downloadsRef.current).catch(() => undefined);
           setLoadError(error instanceof Error ? error.message : 'Could not reach your music server.');
         }
       }
@@ -257,6 +262,7 @@ export default function App() {
       .map((track) => ({ ...track, isFavorite: favoriteIdsRef.current.has(track.id) })));
     tracksRef.current = merged;
     setTracks(merged);
+    void NowPlayingWidgetService.initialize(merged).catch(() => undefined);
     return merged;
   }, [apiConnected]);
 
@@ -369,6 +375,7 @@ export default function App() {
       } else {
         favoriteStateLoaded.current = true;
         setIsLoadingTracks(false);
+        void NowPlayingWidgetService.initialize(savedTracks).catch(() => undefined);
       }
       setApiInitializing(false);
     }).catch(() => {
@@ -404,6 +411,7 @@ export default function App() {
         .map((track) => ({ ...track, isFavorite: favoriteIdsRef.current.has(track.id) })));
       tracksRef.current = merged;
       setTracks(merged);
+      void NowPlayingWidgetService.initialize(merged).catch(() => undefined);
       void loadFavoriteTracks().catch(() => undefined);
       void loadPlaylists();
     } catch (error) {
