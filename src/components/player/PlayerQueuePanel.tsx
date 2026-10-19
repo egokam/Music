@@ -1,6 +1,11 @@
+/* Reanimated scroll handlers update a shared value on the UI thread by design. */
+/* eslint-disable react-hooks/immutability */
+
+import React, { useCallback, useMemo } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { GestureDetector, type NativeGesture } from 'react-native-gesture-handler';
-import { Image, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { Image, Text, TouchableOpacity, View } from 'react-native';
+import Animated, { useAnimatedScrollHandler, type SharedValue } from 'react-native-reanimated';
 import { getMusicApiHeaders } from '../../services/MusicCatalogService';
 import type { Track } from '../../types';
 
@@ -10,6 +15,7 @@ type PlayerQueuePanelProps = {
   tracks: Track[];
   height: number;
   scrollGesture: NativeGesture;
+  scrollOffset: SharedValue<number>;
   shuffleEnabled: boolean;
   repeatMode: RepeatMode;
   autoplayEnabled: boolean;
@@ -69,10 +75,79 @@ const QueueOption = ({
   </TouchableOpacity>
 );
 
-export const PlayerQueuePanel = ({
+const QueueTrackRowView = ({
+  track,
+  onPlayTrack,
+}: {
+  track: Track;
+  onPlayTrack: (track: Track) => void;
+}) => {
+  const artworkSource = useMemo(() => track.artwork
+    ? { uri: track.artwork, headers: track.provider === 'local' ? getMusicApiHeaders() : undefined }
+    : null,
+  [track.artwork, track.provider]);
+
+  return (
+    <TouchableOpacity
+      onPress={() => onPlayTrack(track)}
+      activeOpacity={0.72}
+      accessibilityRole="button"
+      accessibilityLabel={`Play ${track.title} by ${track.artist}`}
+      style={{
+        height: 62,
+        flexDirection: 'row',
+        alignItems: 'center',
+        borderBottomWidth: 1,
+        borderBottomColor: 'rgba(255,255,255,0.1)',
+      }}
+    >
+      {artworkSource ? (
+        <Image
+          source={artworkSource}
+          resizeMode="cover"
+          style={{ width: 46, height: 46, borderRadius: 8, backgroundColor: '#303034' }}
+        />
+      ) : (
+        <View style={{ width: 46, height: 46, borderRadius: 8, backgroundColor: '#303034', alignItems: 'center', justifyContent: 'center' }}>
+          <Ionicons name="musical-note" size={20} color="rgba(255,255,255,0.6)" />
+        </View>
+      )}
+      <View style={{ flex: 1, minWidth: 0, marginLeft: 12, marginRight: 12 }}>
+        <Text numberOfLines={1} style={{ color: 'white', fontSize: 15, fontWeight: '700' }}>
+          {track.title}
+        </Text>
+        <Text numberOfLines={1} style={{ color: 'rgba(255,255,255,0.55)', fontSize: 13, marginTop: 3 }}>
+          {track.artist}
+        </Text>
+      </View>
+      <Ionicons name="play" size={18} color="rgba(255,255,255,0.7)" />
+    </TouchableOpacity>
+  );
+};
+
+const QueueTrackRow = React.memo(QueueTrackRowView);
+QueueTrackRow.displayName = 'QueueTrackRow';
+
+const QueueEmptyState = () => (
+  <View style={{ flex: 1, minHeight: 100, alignItems: 'center', justifyContent: 'center' }}>
+    <Text style={{ color: 'rgba(255,255,255,0.52)', fontSize: 14, textAlign: 'center' }}>
+      Nothing queued. Choose a song from your library to play next.
+    </Text>
+  </View>
+);
+
+const queueKeyExtractor = (track: Track) => track.id;
+const getQueueItemLayout = (_: ArrayLike<Track> | null | undefined, index: number) => ({
+  length: 62,
+  offset: 62 * index,
+  index,
+});
+
+const PlayerQueuePanelView = ({
   tracks,
   height,
   scrollGesture,
+  scrollOffset,
   shuffleEnabled,
   repeatMode,
   autoplayEnabled,
@@ -81,84 +156,64 @@ export const PlayerQueuePanel = ({
   onToggleRepeat,
   onToggleAutoplay,
   onClearQueue,
-}: PlayerQueuePanelProps) => (
-  <View style={{ flex: 1, height }}>
-    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-      <Text style={{ color: 'white', fontSize: 20, fontWeight: '800', flex: 1 }}>Up Next</Text>
-      <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, fontWeight: '600' }}>
-        {tracks.length} {tracks.length === 1 ? 'song' : 'songs'}
-      </Text>
-    </View>
+}: PlayerQueuePanelProps) => {
+  const scrollHandler = useAnimatedScrollHandler({
+    onScroll: (event) => {
+      scrollOffset.value = event.contentOffset.y;
+    },
+  });
+  const renderTrack = useCallback(({ item }: { item: Track }) => (
+    <QueueTrackRow track={item} onPlayTrack={onPlayTrack} />
+  ), [onPlayTrack]);
 
-    <View style={{ flexDirection: 'row', marginBottom: 14 }}>
-      <QueueOption icon="shuffle" label="Shuffle" selected={shuffleEnabled} onPress={onToggleShuffle} />
-      <QueueOption
-        icon={repeatMode === 'one' ? 'repeat' : 'repeat'}
-        label={repeatMode === 'off' ? 'Repeat' : repeatMode === 'all' ? 'Repeat All' : 'Repeat 1'}
-        selected={repeatMode !== 'off'}
-        onPress={onToggleRepeat}
-      />
-      <QueueOption icon="infinite" label="Autoplay" selected={autoplayEnabled} onPress={onToggleAutoplay} />
-      <QueueOption
-        icon="trash-outline"
-        label="Clear"
-        accessibilityLabel="Clear queue"
-        disabled={tracks.length === 0}
-        onPress={onClearQueue}
-      />
-    </View>
+  return (
+    <View style={{ flex: 1, height }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+        <Text style={{ color: 'white', fontSize: 20, fontWeight: '800', flex: 1 }}>Up Next</Text>
+        <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, fontWeight: '600' }}>
+          {tracks.length} {tracks.length === 1 ? 'song' : 'songs'}
+        </Text>
+      </View>
 
-    <GestureDetector gesture={scrollGesture}>
-      <ScrollView
-        style={{ flex: 1 }}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 12 }}
-      >
-        {tracks.length > 0 ? tracks.map((track) => (
-          <TouchableOpacity
-            key={track.id}
-            onPress={() => onPlayTrack(track)}
-            activeOpacity={0.72}
-            accessibilityRole="button"
-            accessibilityLabel={`Play ${track.title} by ${track.artist}`}
-            style={{
-              minHeight: 62,
-              flexDirection: 'row',
-              alignItems: 'center',
-              paddingVertical: 7,
-              borderBottomWidth: 1,
-              borderBottomColor: 'rgba(255,255,255,0.1)',
-            }}
-          >
-            {track.artwork ? (
-              <Image
-                source={{ uri: track.artwork, headers: track.provider === 'local' ? getMusicApiHeaders() : undefined }}
-                resizeMode="cover"
-                style={{ width: 46, height: 46, borderRadius: 8, backgroundColor: '#303034' }}
-              />
-            ) : (
-              <View style={{ width: 46, height: 46, borderRadius: 8, backgroundColor: '#303034', alignItems: 'center', justifyContent: 'center' }}>
-                <Ionicons name="musical-note" size={20} color="rgba(255,255,255,0.6)" />
-              </View>
-            )}
-            <View style={{ flex: 1, minWidth: 0, marginLeft: 12, marginRight: 12 }}>
-              <Text numberOfLines={1} style={{ color: 'white', fontSize: 15, fontWeight: '700' }}>
-                {track.title}
-              </Text>
-              <Text numberOfLines={1} style={{ color: 'rgba(255,255,255,0.55)', fontSize: 13, marginTop: 3 }}>
-                {track.artist}
-              </Text>
-            </View>
-            <Ionicons name="play" size={18} color="rgba(255,255,255,0.7)" />
-          </TouchableOpacity>
-        )) : (
-          <View style={{ flex: 1, minHeight: 100, alignItems: 'center', justifyContent: 'center' }}>
-            <Text style={{ color: 'rgba(255,255,255,0.52)', fontSize: 14, textAlign: 'center' }}>
-              Nothing queued. Choose a song from your library to play next.
-            </Text>
-          </View>
-        )}
-      </ScrollView>
-    </GestureDetector>
-  </View>
-);
+      <View style={{ flexDirection: 'row', marginBottom: 14 }}>
+        <QueueOption icon="shuffle" label="Shuffle" selected={shuffleEnabled} onPress={onToggleShuffle} />
+        <QueueOption
+          icon="repeat"
+          label={repeatMode === 'off' ? 'Repeat' : repeatMode === 'all' ? 'Repeat All' : 'Repeat 1'}
+          selected={repeatMode !== 'off'}
+          onPress={onToggleRepeat}
+        />
+        <QueueOption icon="infinite" label="Autoplay" selected={autoplayEnabled} onPress={onToggleAutoplay} />
+        <QueueOption
+          icon="trash-outline"
+          label="Clear"
+          accessibilityLabel="Clear queue"
+          disabled={tracks.length === 0}
+          onPress={onClearQueue}
+        />
+      </View>
+
+      <GestureDetector gesture={scrollGesture}>
+        <Animated.FlatList
+          data={tracks}
+          renderItem={renderTrack}
+          keyExtractor={queueKeyExtractor}
+          getItemLayout={getQueueItemLayout}
+          ListEmptyComponent={QueueEmptyState}
+          style={{ flex: 1 }}
+          initialNumToRender={8}
+          maxToRenderPerBatch={8}
+          windowSize={5}
+          updateCellsBatchingPeriod={32}
+          showsVerticalScrollIndicator={false}
+          scrollEventThrottle={16}
+          onScroll={scrollHandler}
+          contentContainerStyle={{ paddingBottom: 12, flexGrow: tracks.length === 0 ? 1 : 0 }}
+          keyboardShouldPersistTaps="handled"
+        />
+      </GestureDetector>
+    </View>
+  );
+};
+
+export const PlayerQueuePanel = React.memo(PlayerQueuePanelView);

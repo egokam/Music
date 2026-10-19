@@ -75,6 +75,8 @@ const PlayerOverlayView = ({
   const gestureStartedOnMiniPlaybackControl = useSharedValue(false);
   const lyricsProgress = useSharedValue(0);
   const queueContentProgress = useSharedValue(0);
+  const detailsScrollOffset = useSharedValue(0);
+  const sheetPanAllowed = useSharedValue(true);
   const trackTransition = useSharedValue(1);
   const trackTransitionGeneration = useRef(0);
   const onOpenRef = useRef(onOpen);
@@ -86,8 +88,8 @@ const PlayerOverlayView = ({
   const [queueView, setQueueView] = useState({ trackId: track.id, expanded: false });
   const lyricsExpanded = lyricsView.trackId === renderedTrack.id && lyricsView.expanded;
   const queueExpanded = queueView.trackId === renderedTrack.id && queueView.expanded;
-  const lyrics = renderedTrack.lyrics ?? [];
-  const hasLyrics = lyrics.some((line) => line.text.trim().length > 0);
+  const lyrics = useMemo(() => renderedTrack.lyrics ?? [], [renderedTrack.lyrics]);
+  const hasLyrics = useMemo(() => lyrics.some((line) => line.text.trim().length > 0), [lyrics]);
   const isLiveRadio = renderedTrack.provider === 'radio';
   const canFavoriteTrack = renderedTrack.provider === 'local';
   const detailsExpanded = (lyricsExpanded && hasLyrics) || queueExpanded;
@@ -95,15 +97,29 @@ const PlayerOverlayView = ({
   const totalSeconds = Math.max(0, durationSeconds);
   const remainingSeconds = Math.max(0, totalSeconds - elapsedSeconds);
   const formatTime = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
-  const activeLyricIndex = lyrics.reduce((activeIndex, line, index) =>
-    line.text.trim().length > 0 && line.timeMs !== null && line.timeMs <= elapsedSeconds * 1000
-      ? index
-      : activeIndex,
-  -1);
-  const activeQueueIndex = queue.findIndex((item) => item.id === renderedTrack.id);
-  const upcomingTracks = activeQueueIndex >= 0
+  const activeLyricIndex = useMemo(() => {
+    if (!lyricsExpanded || !hasLyrics) return -1;
+    return lyrics.reduce((activeIndex, line, index) =>
+      line.text.trim().length > 0 && line.timeMs !== null && line.timeMs <= elapsedSeconds * 1000
+        ? index
+        : activeIndex,
+    -1);
+  }, [elapsedSeconds, hasLyrics, lyrics, lyricsExpanded]);
+  const activeQueueIndex = useMemo(
+    () => queue.findIndex((item) => item.id === renderedTrack.id),
+    [queue, renderedTrack.id],
+  );
+  const upcomingTracks = useMemo(() => activeQueueIndex >= 0
     ? queue.slice(activeQueueIndex + 1)
-    : queue.filter((item) => item.id !== renderedTrack.id);
+    : queue.filter((item) => item.id !== renderedTrack.id),
+  [activeQueueIndex, queue, renderedTrack.id]);
+  const artworkSource = useMemo(() => renderedTrack.artwork
+    ? {
+        uri: renderedTrack.artwork,
+        headers: renderedTrack.provider === 'local' ? getMusicApiHeaders() : undefined,
+      }
+    : undefined,
+  [renderedTrack.artwork, renderedTrack.provider]);
 
   const miniTop = Math.max(0, windowHeight - 160);
   const miniBottom = Math.max(0, windowHeight - miniTop - 58);
@@ -175,6 +191,10 @@ const PlayerOverlayView = ({
   useEffect(() => {
     queueContentProgress.value = withTiming(queueExpanded ? 1 : 0, { duration: 180 });
   }, [queueContentProgress, queueExpanded]);
+
+  useEffect(() => {
+    detailsScrollOffset.value = 0;
+  }, [detailsScrollOffset, lyricsExpanded, queueExpanded, renderedTrack.id]);
 
   useEffect(() => {
     lyricsProgress.value = withTiming(0, { duration: 0 });
@@ -294,19 +314,23 @@ const PlayerOverlayView = ({
       Gesture.Pan()
         .activeOffsetY(8)
         .failOffsetX([-12, 12])
-        .requireExternalGestureToFail(detailsScrollGesture)
+        .simultaneousWithExternalGesture(detailsScrollGesture)
         .onBegin((event) => {
           gestureStartedOnMiniPlaybackControl.value = !visible && event.y <= 60 &&
             event.x >= windowWidth - 152 && event.x <= windowWidth - 36;
+          const scrollRegionTop = queueExpanded ? lyricsTextTop + 112 : lyricsTextTop;
+          const startedInsideScrollableDetails = visible && detailsExpanded &&
+            event.y >= scrollRegionTop && event.y <= lyricsTextTop + lyricsViewportHeight;
+          sheetPanAllowed.value = !startedInsideScrollableDetails || detailsScrollOffset.value <= 1;
         })
         .onStart(() => {
-          if (gestureStartedOnMiniPlaybackControl.value) return;
+          if (gestureStartedOnMiniPlaybackControl.value || !sheetPanAllowed.value) return;
           cancelAnimation(progress);
           gestureChanged.value = false;
           gestureStartProgress.value = progress.value;
         })
         .onUpdate((event) => {
-          if (gestureStartedOnMiniPlaybackControl.value) return;
+          if (gestureStartedOnMiniPlaybackControl.value || !sheetPanAllowed.value) return;
           if (Math.abs(event.translationY) > 0) {
             gestureChanged.value = true;
             progress.value = Math.max(
@@ -316,7 +340,7 @@ const PlayerOverlayView = ({
           }
         })
         .onEnd((event) => {
-          if (gestureStartedOnMiniPlaybackControl.value) return;
+          if (gestureStartedOnMiniPlaybackControl.value || !sheetPanAllowed.value) return;
           const translationY = event.translationY;
           const startProgress = gestureStartProgress.value;
 
@@ -341,15 +365,17 @@ const PlayerOverlayView = ({
         .onFinalize((_event, success) => {
           if (gestureStartedOnMiniPlaybackControl.value) {
             gestureStartedOnMiniPlaybackControl.value = false;
+            sheetPanAllowed.value = true;
             return;
           }
-          if (!success && gestureChanged.value) {
+          if (sheetPanAllowed.value && !success && gestureChanged.value) {
             if (gestureStartProgress.value >= 0.5) {
               restoreExpandedPlayer();
             } else {
               restoreMiniPlayer();
             }
           }
+          sheetPanAllowed.value = true;
         }),
     [
       closeWithAnimation,
@@ -357,11 +383,17 @@ const PlayerOverlayView = ({
       gestureChanged,
       gestureStartedOnMiniPlaybackControl,
       gestureStartProgress,
+      detailsExpanded,
+      detailsScrollOffset,
       detailsScrollGesture,
+      lyricsTextTop,
+      lyricsViewportHeight,
       openWithAnimation,
       progress,
+      queueExpanded,
       restoreExpandedPlayer,
       restoreMiniPlayer,
+      sheetPanAllowed,
       visible,
       windowWidth,
     ],
@@ -585,9 +617,9 @@ const PlayerOverlayView = ({
             ]}
           />
           <ReanimatedAnimated.Image
-            source={renderedTrack.artwork ? { uri: renderedTrack.artwork, headers: renderedTrack.provider === 'local' ? getMusicApiHeaders() : undefined } : undefined}
+            source={artworkSource}
             resizeMode="cover"
-            blurRadius={32}
+            blurRadius={20}
             style={[
               {
                 position: 'absolute',
@@ -659,6 +691,7 @@ const PlayerOverlayView = ({
                   activeLineIndex={activeLyricIndex}
                   viewportHeight={lyricsViewportHeight}
                   scrollGesture={detailsScrollGesture}
+                  scrollOffset={detailsScrollOffset}
                   onSeek={onSeek}
                 />
               </ReanimatedAnimated.View>
@@ -677,6 +710,7 @@ const PlayerOverlayView = ({
                   tracks={upcomingTracks}
                   height={lyricsViewportHeight}
                   scrollGesture={detailsScrollGesture}
+                  scrollOffset={detailsScrollOffset}
                   shuffleEnabled={shuffleEnabled}
                   repeatMode={repeatMode}
                   autoplayEnabled={autoplayEnabled}
@@ -880,7 +914,7 @@ const PlayerOverlayView = ({
               style={{ width: '100%', height: '100%' }}
             >
               <ReanimatedAnimated.Image
-                source={renderedTrack.artwork ? { uri: renderedTrack.artwork, headers: renderedTrack.provider === 'local' ? getMusicApiHeaders() : undefined } : undefined}
+                source={artworkSource}
                 resizeMode="cover"
                 accessibilityLabel={renderedTrack.album + ' album artwork'}
                 style={{ width: '100%', height: '100%' }}

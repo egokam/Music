@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert } from 'react-native';
+import { Alert, NativeModules } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -19,6 +19,8 @@ import { OfflineMusicService } from './src/services/OfflineMusicService';
 import { PlaylistStorageService } from './src/services/PlaylistStorageService';
 import type { PlaylistCoverSelection, PlaylistSummary, Track } from './src/types';
 import './styles.css';
+
+type SystemVolumeManager = typeof import('react-native-volume-manager').VolumeManager;
 
 const Tab = createBottomTabNavigator();
 const playbackCountsFile = new File(Paths.document, 'musiqapp-play-counts.json');
@@ -62,6 +64,7 @@ const isMusicApiAuthenticationError = (error: unknown) => {
 export default function App() {
   const player = useAudioPlayer(null, { updateInterval: 250 });
   const playerStatus = useAudioPlayerStatus(player);
+  const [playerVolume, setPlayerVolumeState] = useState(player.volume);
   const [tracks, setTracks] = useState<Track[]>([]);
   const [playCounts, setPlayCounts] = useState<PlaybackCounts>({});
   const [favoriteTracks, setFavoriteTracks] = useState<Track[]>([]);
@@ -90,6 +93,7 @@ export default function App() {
   const searchGeneration = useRef(0);
   const handledFinishedTrack = useRef<string | null>(null);
   const loadingAudiusMixPages = useRef(new Set<string>());
+  const systemVolumeManager = useRef<SystemVolumeManager | null>(null);
 
   const updatePlaybackQueue = useCallback((nextQueue: Track[]) => {
     queueRef.current = nextQueue;
@@ -127,12 +131,46 @@ export default function App() {
   }, [downloadedTracks]);
 
   useEffect(() => {
+    // Expo Go does not include this native module; keep its existing per-player volume behavior there.
+    if (!NativeModules.VolumeManager) return;
+
+    // Load only when the binary contains the native module, so Expo Go does not crash at import time.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const manager = require('react-native-volume-manager').VolumeManager as SystemVolumeManager;
+    systemVolumeManager.current = manager;
+    let isMounted = true;
+    const volumeSubscription = manager.addVolumeListener(({ volume }) => {
+      setPlayerVolumeState(Math.max(0, Math.min(1, volume)));
+    });
+
+    void manager.getVolume().then(({ volume }) => {
+      if (isMounted) setPlayerVolumeState(Math.max(0, Math.min(1, volume)));
+    }).catch(() => undefined);
+
+    return () => {
+      isMounted = false;
+      volumeSubscription.remove();
+      if (systemVolumeManager.current === manager) systemVolumeManager.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
     void setAudioModeAsync({
       playsInSilentMode: true,
       shouldPlayInBackground: true,
       interruptionMode: 'doNotMix',
     }).catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    const manager = systemVolumeManager.current;
+    if (!manager) return;
+
+    void manager.showNativeVolumeUI({ enabled: !playerVisible }).catch(() => undefined);
+    return () => {
+      void manager.showNativeVolumeUI({ enabled: true }).catch(() => undefined);
+    };
+  }, [playerVisible]);
 
   const searchTracks = useCallback(async (query = '') => {
     const generation = ++searchGeneration.current;
@@ -574,8 +612,21 @@ export default function App() {
     void player.seekTo(Math.max(0, seconds));
   }, [player]);
 
+  // AudioPlayer.volume is its documented mutable API; Expo's hooks lint rule does not recognize it.
+  // eslint-disable-next-line react-hooks/immutability
   const setPlayerVolume = useCallback((volume: number) => {
-    player.volume = Math.max(0, Math.min(1, volume));
+    const nextVolume = Math.max(0, Math.min(1, volume));
+    setPlayerVolumeState(nextVolume);
+
+    const manager = systemVolumeManager.current;
+    if (manager) {
+      void manager.setVolume(nextVolume, { type: 'music', showUI: false }).catch(() => undefined);
+      return;
+    }
+
+    // Keep the Expo Go preview usable when its binary lacks the native volume module.
+    // eslint-disable-next-line react-hooks/immutability
+    player.volume = nextVolume;
   }, [player]);
 
   const updateTrackWithLyrics = useCallback(async (track: Track, syncedLyrics: string) => {
@@ -942,7 +993,7 @@ export default function App() {
           isPlaying={playerStatus.playing}
           currentTime={playerStatus.currentTime}
           durationSeconds={playerStatus.duration || activeTrack.durationSeconds || 0}
-          volume={player.volume}
+          volume={playerVolume}
           queue={playbackQueue}
           shuffleEnabled={shuffleEnabled}
           repeatMode={repeatMode}

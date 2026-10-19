@@ -1,6 +1,10 @@
-import { useCallback, useEffect, useRef } from 'react';
+/* Reanimated scroll handlers update a shared value on the UI thread by design. */
+/* eslint-disable react-hooks/immutability */
+
+import React, { useCallback, useEffect, useRef } from 'react';
 import { ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import { GestureDetector, type NativeGesture } from 'react-native-gesture-handler';
+import Animated, { useAnimatedScrollHandler, type SharedValue } from 'react-native-reanimated';
 import type { LyricLine } from '../../types';
 
 type PlayerLyricsProps = {
@@ -9,15 +13,17 @@ type PlayerLyricsProps = {
   activeLineIndex: number;
   viewportHeight: number;
   scrollGesture: NativeGesture;
+  scrollOffset: SharedValue<number>;
   onSeek: (seconds: number) => void;
 };
 
-export const PlayerLyrics = ({
+const PlayerLyricsView = ({
   trackId,
   lyrics,
   activeLineIndex,
   viewportHeight,
   scrollGesture,
+  scrollOffset,
   onSeek,
 }: PlayerLyricsProps) => {
   const scrollRef = useRef<ScrollView>(null);
@@ -26,6 +32,11 @@ export const PlayerLyrics = ({
   const viewportHeightRef = useRef(viewportHeight);
   const isManuallyScrolling = useRef(false);
   const recenterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const animatedScrollHandler = useAnimatedScrollHandler({
+    onScroll: (event) => {
+      scrollOffset.value = event.contentOffset.y;
+    },
+  });
 
   useEffect(() => {
     activeLineRef.current = activeLineIndex;
@@ -68,12 +79,13 @@ export const PlayerLyrics = ({
 
   return (
     <GestureDetector gesture={scrollGesture}>
-      <ScrollView
+      <Animated.ScrollView
         ref={scrollRef}
         style={{ flex: 1 }}
         contentContainerStyle={{ paddingVertical: Math.max(0, viewportHeight / 2) }}
         showsVerticalScrollIndicator={false}
         scrollEventThrottle={16}
+        onScroll={animatedScrollHandler}
         onScrollBeginDrag={() => {
           clearRecenterTimer();
           isManuallyScrolling.current = true;
@@ -124,7 +136,9 @@ export const PlayerLyrics = ({
             </View>
           ),
         )}
-      </ScrollView>
+      </Animated.ScrollView>
     </GestureDetector>
   );
 };
+
+export const PlayerLyrics = React.memo(PlayerLyricsView);
