@@ -65,8 +65,10 @@ const getWidget = (): WidgetHandle | null => {
     // Keep Expo Go working: it does not contain ExpoWidgets or the generated widget target.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const widgetApi = require('expo-widgets') as typeof import('expo-widgets');
+    // The generic .ts fallback sorts before .ios.tsx in Metro's source extensions,
+    // so target the iOS layout directly to register its real widget tree.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const widgetModule = require('../widgets/NowPlayingWidget') as { default: WidgetHandle };
+    const widgetModule = require('../widgets/NowPlayingWidget.ios') as { default: WidgetHandle };
     widgetDirectory = widgetApi.widgetsDirectory;
     widgetHandle = widgetModule.default;
     return widgetHandle;
