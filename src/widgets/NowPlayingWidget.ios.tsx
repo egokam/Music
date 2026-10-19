@@ -5,6 +5,7 @@ import {
   blur,
   brightness,
   clipShape,
+  containerBackground,
   font,
   frame,
   lineLimit,
@@ -37,7 +38,7 @@ const NowPlayingWidgetLayout = (props: NowPlayingWidgetProps) => {
     <ZStack
       modifiers={[
         frame({ maxWidth: 10000, maxHeight: 10000 }),
-        background('#211D22'),
+        containerBackground('#211D22', 'widget'),
         clipShape('roundedRectangle', 26),
         widgetURL(launchUrl),
       ]}
