@@ -19,6 +19,17 @@ const safeFileName = (value: string) => value.replace(/[^a-zA-Z0-9_-]/g, '_');
 
 const getPlayableTracks = (tracks: Track[]) => tracks.filter((track) => Boolean(track.localUri || track.streamUrl));
 
+const getDurationSeconds = (track: Track) => {
+  if (typeof track.durationSeconds === 'number' && Number.isFinite(track.durationSeconds)) {
+    return Math.max(track.durationSeconds, 0);
+  }
+  const parts = track.duration.split(':').map(Number);
+  if (parts.some((part) => !Number.isFinite(part))) return 0;
+  if (parts.length === 2) return Math.max(parts[0] * 60 + parts[1], 0);
+  if (parts.length === 3) return Math.max(parts[0] * 3600 + parts[1] * 60 + parts[2], 0);
+  return 0;
+};
+
 const artworkHash = (value: string) => {
   let hash = 5381;
   for (let index = 0; index < value.length; index += 1) {
@@ -114,7 +125,13 @@ const pruneArtworkCache = (currentArtworkUri: string) => {
   }
 };
 
-const publishTrack = async (track: Track, isPlaying: boolean, generation: number) => {
+const publishTrack = async (
+  track: Track,
+  isPlaying: boolean,
+  generation: number,
+  currentTime = 0,
+  durationSeconds = getDurationSeconds(track),
+) => {
   const widget = getWidget();
   if (!widget) return;
 
@@ -127,6 +144,8 @@ const publishTrack = async (track: Track, isPlaying: boolean, generation: number
     artist: track.artist,
     artworkUri,
     isPlaying,
+    currentTime: Number.isFinite(currentTime) ? Math.max(currentTime, 0) : 0,
+    durationSeconds: Number.isFinite(durationSeconds) ? Math.max(durationSeconds, 0) : 0,
   });
   pruneArtworkCache(artworkUri);
 };
@@ -139,7 +158,10 @@ export const NowPlayingWidgetService = {
     // A fresh app process gets one library-backed fallback. Once the user starts
     // playback, `update` owns the widget for the rest of that process.
     if (sessionTrackId) return;
-    const candidates = getPlayableTracks(libraryTracks);
+    const playableTracks = getPlayableTracks(libraryTracks);
+    const candidates = playableTracks.length > 0
+      ? playableTracks
+      : libraryTracks.filter((track) => Boolean(track.id && track.title));
     if (candidates.length === 0) return;
 
     const selectedTrack = candidates[Math.floor(Math.random() * candidates.length)];
@@ -154,7 +176,7 @@ export const NowPlayingWidgetService = {
     await publishTrack(selectedTrack, false, generation);
   },
 
-  async update(track: Track, isPlaying: boolean) {
+  async update(track: Track, isPlaying: boolean, currentTime = 0, durationSeconds = getDurationSeconds(track)) {
     sessionTrackId = track.id;
     try {
       saveTrack(track);
@@ -163,7 +185,7 @@ export const NowPlayingWidgetService = {
     }
 
     const generation = ++updateGeneration;
-    await publishTrack(track, isPlaying, generation);
+    await publishTrack(track, isPlaying, generation, currentTime, durationSeconds);
   },
 
   async getSavedTrack(): Promise<Track | null> {

@@ -105,6 +105,7 @@ export default function App() {
   const activeTrackRef = useRef<Track | null>(null);
   const playerPlayingRef = useRef(false);
   const playerCurrentTimeRef = useRef(0);
+  const playerDurationRef = useRef(0);
   const searchGeneration = useRef(0);
   const handledFinishedTrack = useRef<string | null>(null);
   const loadingAudiusMixPages = useRef(new Set<string>());
@@ -140,6 +141,10 @@ export default function App() {
   useEffect(() => {
     playerCurrentTimeRef.current = playerStatus.currentTime;
   }, [playerStatus.currentTime]);
+
+  useEffect(() => {
+    playerDurationRef.current = playerStatus.duration;
+  }, [playerStatus.duration]);
 
   useEffect(() => {
     downloadsRef.current = downloadedTracks;
@@ -485,7 +490,19 @@ export default function App() {
 
   useEffect(() => {
     if (!activeTrack) return;
-    void NowPlayingWidgetService.update(activeTrack, playerStatus.playing).catch(() => undefined);
+    const publishWidgetState = () => {
+      void NowPlayingWidgetService.update(
+        activeTrack,
+        playerPlayingRef.current,
+        playerCurrentTimeRef.current,
+        playerDurationRef.current,
+      ).catch(() => undefined);
+    };
+
+    publishWidgetState();
+    if (!playerStatus.playing) return;
+    const progressTimer = setInterval(publishWidgetState, 2000);
+    return () => clearInterval(progressTimer);
   }, [activeTrack, playerStatus.playing]);
 
   const loadMoreAudiusMixTracks = useCallback(async (mixId: string) => {

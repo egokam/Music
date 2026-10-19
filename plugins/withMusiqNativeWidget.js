@@ -16,6 +16,8 @@ struct MusiqNowPlayingEntry: TimelineEntry {
   let artist: String
   let artworkUri: String
   let isPlaying: Bool
+  let currentTime: Double
+  let durationSeconds: Double
 }
 
 struct MusiqNowPlayingProvider: TimelineProvider {
@@ -26,7 +28,9 @@ struct MusiqNowPlayingProvider: TimelineProvider {
       title: "No Recently Played Music",
       artist: "",
       artworkUri: "",
-      isPlaying: false
+      isPlaying: false,
+      currentTime: 0,
+      durationSeconds: 0
     )
   }
 
@@ -56,13 +60,21 @@ struct MusiqNowPlayingProvider: TimelineProvider {
       title: props["title"] as? String ?? "Unknown Track",
       artist: props["artist"] as? String ?? "Unknown Artist",
       artworkUri: props["artworkUri"] as? String ?? "",
-      isPlaying: props["isPlaying"] as? Bool ?? false
+      isPlaying: props["isPlaying"] as? Bool ?? false,
+      currentTime: number(props["currentTime"]),
+      durationSeconds: number(props["durationSeconds"])
     )
   }
 
   private func timestamp(_ record: [String: Any]) -> Int {
     if let value = record["timestamp"] as? Int { return value }
     if let value = record["timestamp"] as? NSNumber { return value.intValue }
+    return 0
+  }
+
+  private func number(_ value: Any?) -> Double {
+    if let value = value as? Double { return value }
+    if let value = value as? NSNumber { return value.doubleValue }
     return 0
   }
 }
@@ -82,6 +94,32 @@ struct MusiqNowPlayingView: View {
     return URL(string: "musiqapp://widget/play?trackId=\\(encoded)")
   }
 
+  private var duration: Double {
+    guard entry.durationSeconds.isFinite, entry.durationSeconds > 0 else { return 0 }
+    return entry.durationSeconds
+  }
+
+  private var elapsed: Double {
+    let base = entry.currentTime.isFinite ? max(entry.currentTime, 0) : 0
+    let liveAdvance = entry.isPlaying ? max(Date().timeIntervalSince(entry.date), 0) : 0
+    return min(base + liveAdvance, duration > 0 ? duration : base)
+  }
+
+  private var progress: Double {
+    guard duration > 0 else { return 0 }
+    return min(max(elapsed / duration, 0), 1)
+  }
+
+  private var remaining: Double {
+    guard duration > 0 else { return 0 }
+    return max(duration - elapsed, 0)
+  }
+
+  private func timeLabel(_ value: Double) -> String {
+    let totalSeconds = max(Int(value.rounded(.down)), 0)
+    return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
+  }
+
   var body: some View {
     if #available(iOS 17.0, *) {
       content
@@ -99,10 +137,14 @@ struct MusiqNowPlayingView: View {
         Image(uiImage: artwork)
           .resizable()
           .scaledToFill()
-          .blur(radius: 24)
-          .scaleEffect(1.22)
-          .opacity(0.86)
-        Color.black.opacity(0.42)
+          .blur(radius: 30)
+          .scaleEffect(1.25)
+          .opacity(0.82)
+        LinearGradient(
+          colors: [Color.black.opacity(0.20), Color.black.opacity(0.58)],
+          startPoint: .topLeading,
+          endPoint: .bottomTrailing
+        )
       } else {
         Color(red: 0.13, green: 0.11, blue: 0.13)
       }
@@ -118,44 +160,66 @@ struct MusiqNowPlayingView: View {
             .lineLimit(1)
         }
       } else {
-        HStack(spacing: 14) {
-          artworkView
+        VStack(alignment: .leading, spacing: 0) {
+          HStack(spacing: 10) {
+            artworkView
 
-          VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 6) {
-              Text("NOW PLAYING")
-                .font(.caption2.weight(.bold))
+            VStack(alignment: .leading, spacing: 2) {
+              Text(entry.title.isEmpty ? "Unknown Track" : entry.title)
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+
+              Text(entry.artist.isEmpty ? "Unknown Artist" : entry.artist)
+                .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(.white.opacity(0.78))
                 .lineLimit(1)
-              Spacer(minLength: 0)
-              Image(systemName: "music.note")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(.white)
             }
 
-            Text(entry.title.isEmpty ? "Unknown Track" : entry.title)
-              .font(.headline.weight(.bold))
-              .foregroundStyle(.white)
-              .lineLimit(1)
-
-            Text(entry.artist.isEmpty ? "Unknown Artist" : entry.artist)
-              .font(.subheadline.weight(.medium))
-              .foregroundStyle(.white.opacity(0.78))
-              .lineLimit(1)
-
-            HStack(spacing: 7) {
-              Image(systemName: entry.isPlaying ? "pause.fill" : "play.fill")
-                .font(.system(size: 11, weight: .bold))
-              Text(entry.isPlaying ? "Pause" : "Play")
-                .font(.caption.weight(.semibold))
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(.thinMaterial, in: Capsule())
+            Spacer(minLength: 4)
+            Image(systemName: "waveform")
+              .font(.system(size: 18, weight: .semibold))
+              .foregroundStyle(.white.opacity(0.72))
           }
+
+          Spacer(minLength: 8)
+
+          HStack(spacing: 7) {
+            Text(timeLabel(elapsed))
+              .font(.system(size: 11, weight: .medium, design: .rounded))
+              .foregroundStyle(.white.opacity(0.78))
+              .frame(width: 32, alignment: .leading)
+
+            ProgressView(value: progress, total: 1)
+              .tint(.white.opacity(0.86))
+
+            Text(duration > 0 ? "-\\(timeLabel(remaining))" : "-0:00")
+              .font(.system(size: 11, weight: .medium, design: .rounded))
+              .foregroundStyle(.white.opacity(0.78))
+              .frame(width: 38, alignment: .trailing)
+          }
+
+          Spacer(minLength: 5)
+
+          HStack {
+            Spacer()
+            Image(systemName: "backward.fill")
+              .font(.system(size: 19, weight: .semibold))
+            Spacer()
+            Image(systemName: entry.isPlaying ? "pause.fill" : "play.fill")
+              .font(.system(size: 24, weight: .bold))
+            Spacer()
+            Image(systemName: "forward.fill")
+              .font(.system(size: 19, weight: .semibold))
+            Spacer()
+            Image(systemName: "airplayaudio")
+              .font(.system(size: 19, weight: .semibold))
+              .foregroundStyle(.white.opacity(0.72))
+          }
+          .foregroundStyle(.white)
         }
-        .padding(14)
+        .padding(.horizontal, 15)
+        .padding(.vertical, 13)
       }
     }
     .widgetURL(launchURL)
@@ -168,17 +232,17 @@ struct MusiqNowPlayingView: View {
       Image(uiImage: artwork)
         .resizable()
         .scaledToFill()
-        .frame(width: 104, height: 104)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .frame(width: 58, height: 58)
+        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
     } else {
       ZStack {
-        RoundedRectangle(cornerRadius: 14, style: .continuous)
+        RoundedRectangle(cornerRadius: 11, style: .continuous)
           .fill(Color(red: 0.23, green: 0.19, blue: 0.22))
         Image(systemName: "music.note")
-          .font(.system(size: 36, weight: .medium))
+          .font(.system(size: 22, weight: .medium))
           .foregroundStyle(.white)
       }
-      .frame(width: 104, height: 104)
+      .frame(width: 58, height: 58)
     }
   }
 }

@@ -24,6 +24,8 @@ export type NowPlayingWidgetProps = {
   artist: string;
   artworkUri: string;
   isPlaying: boolean;
+  currentTime: number;
+  durationSeconds: number;
 };
 
 const NowPlayingWidgetLayout = (props: NowPlayingWidgetProps) => {
